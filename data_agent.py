@@ -8,22 +8,48 @@ from config import *
 class DataAgent:
     UNIVERSE = {}
 
-    NIFTY50_SYMBOLS = [
-        "RELIANCE", "TCS", "HDFCBANK", "INFY", "HINDUNILVR",
-        "ICICIBANK", "KOTAKBANK", "SBIN", "BHARTIARTL", "ITC",
-        "AXISBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
-        "BAJFINANCE", "MARUTI", "SUNPHARMA", "TITAN", "POWERGRID",
-        "NTPC", "ULTRACEMCO", "TECHM", "NESTLEIND", "BAJAJFINSV",
-        "ONGC", "TATAMOTORS", "TATASTEEL", "ADANIENT", "ADANIPORTS",
-        "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM",
-        "HEROMOTOCO", "HINDALCO", "JSWSTEEL", "M&M", "CIPLA",
-        "BRITANNIA", "APOLLOHOSP", "BPCL", "SBILIFE", "HDFCLIFE",
-        "INDUSINDBK", "BAJAJ-AUTO", "TATACONSUM", "UPL", "SHREECEM"
-    ]
+    NIFTY50_SYMBOLS = []
 
     def __init__(self, kite: KiteConnect):
         self.kite = kite
+        self._load_nifty50_symbols()
         self.load_universe()
+
+    def _load_nifty50_symbols(self):
+        """Dynamically fetch latest Nifty 50 constituents from NSE."""
+        try:
+            import requests
+            url = "https://www.nseindia.com/api/equity-stockIndices?index=NIFTY%2050"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Referer": "https://www.nseindia.com/"
+            }
+            session = requests.Session()
+            # Initial request to get cookies
+            session.get("https://www.nseindia.com/", headers=headers, timeout=10)
+            response = session.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                symbols = [item['symbol'] for item in data.get('data', []) if item.get('symbol') != 'NIFTY 50']
+                if symbols:
+                    DataAgent.NIFTY50_SYMBOLS = symbols
+                    print(f"[DataAgent] Successfully fetched {len(symbols)} NIFTY 50 constituents.")
+                    return
+        except Exception as e:
+            print(f"[DataAgent] Failed to fetch Nifty 50 symbols from NSE: {e}")
+        
+        # Fallback to default if fetch fails
+        print("[DataAgent] Using fallback hardcoded Nifty 50 list.")
+        DataAgent.NIFTY50_SYMBOLS = [
+            "RELIANCE", "TCS", "HDFCBANK", "INFY", "HINDUNILVR", "ICICIBANK", "KOTAKBANK", "SBIN", 
+            "BHARTIARTL", "ITC", "AXISBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT", "BAJFINANCE", 
+            "MARUTI", "SUNPHARMA", "TITAN", "POWERGRID", "NTPC", "ULTRACEMCO", "TECHM", "NESTLEIND", 
+            "BAJAJFINSV", "ONGC", "TATAMOTORS", "TATASTEEL", "ADANIENT", "ADANIPORTS", "COALINDIA", 
+            "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM", "HEROMOTOCO", "HINDALCO", "JSWSTEEL", "M&M", 
+            "CIPLA", "BRITANNIA", "APOLLOHOSP", "BPCL", "SBILIFE", "HDFCLIFE", "INDUSINDBK", 
+            "BAJAJ-AUTO", "TATACONSUM", "UPL", "SHREECEM"
+        ]
 
     def load_universe(self):
         try:
