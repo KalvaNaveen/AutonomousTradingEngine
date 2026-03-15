@@ -15,7 +15,7 @@ import requests
 import json
 import datetime
 import sqlite3
-from config import STATE_DB, today_ist, now_ist
+from config import STATE_DB, today_ist
 
 NSE_HOLIDAY_URL = "https://www.nseindia.com/api/holiday-master?type=trading"
 RBI_CALENDAR_URL = "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx"
@@ -149,7 +149,7 @@ class BlackoutCalendar:
                 (cache_date, dates_json, updated_at)
                 VALUES (?, ?, ?)
             """, (cache_key, json.dumps(list(dates)),
-                  now_ist().isoformat()))
+                  datetime.datetime.now().isoformat()))
             conn.commit()
 
     def get_blackout_dates(self) -> set:
@@ -176,8 +176,8 @@ class BlackoutCalendar:
         return all_dates
 
     def is_blackout(self, date: datetime.date = None) -> bool:
-        """Check if given date (default today IST) is a blackout day."""
-        check = (date or today_ist()).isoformat()
+        """Check if given date (default today) is a blackout day."""
+        check = (date or datetime.date.today()).isoformat()
         return check in self.get_blackout_dates()
 
     def refresh(self, alert_fn=None):
@@ -193,7 +193,7 @@ class BlackoutCalendar:
         if alert_fn:
             upcoming = sorted([
                 d for d in dates
-                if d >= today_ist().isoformat()
+                if d >= datetime.date.today().isoformat()
             ])[:5]
             lines = "\n".join([f"• `{d}`" for d in upcoming])
             alert_fn(f"📅 *BLACKOUT CALENDAR REFRESHED*\n"

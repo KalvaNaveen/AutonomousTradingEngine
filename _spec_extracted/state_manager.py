@@ -7,7 +7,7 @@ No position is ever lost or left unmonitored.
 import sqlite3
 import datetime
 import json
-from config import STATE_DB, today_ist, now_ist
+from config import STATE_DB, today_ist
 
 
 class StateManager:
@@ -61,7 +61,7 @@ class StateManager:
 
     def save(self, entry_oid: str, trade: dict):
         """Persist trade immediately after order placement."""
-        now = now_ist().isoformat()
+        now = datetime.datetime.now().isoformat()
 
         def _str(val):
             if isinstance(val, datetime.datetime):
@@ -106,7 +106,7 @@ class StateManager:
                 UPDATE active_positions
                 SET partial_filled=1, remaining_qty=?, last_updated=?
                 WHERE entry_oid=?
-            """, (remaining_qty, now_ist().isoformat(), entry_oid))
+            """, (remaining_qty, datetime.datetime.now().isoformat(), entry_oid))
             conn.commit()
 
     def close(self, entry_oid: str):
@@ -115,7 +115,7 @@ class StateManager:
                 UPDATE active_positions
                 SET status='CLOSED', last_updated=?
                 WHERE entry_oid=?
-            """, (now_ist().isoformat(), entry_oid))
+            """, (datetime.datetime.now().isoformat(), entry_oid))
             conn.commit()
 
     def set_kv(self, key: str, value: str):

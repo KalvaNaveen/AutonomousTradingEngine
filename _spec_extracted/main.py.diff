@@ -1,0 +1,53 @@
+--- project/main.py
++++ spec/main.py
+@@ -286,10 +286,24 @@
+         if not can_trade:
+-            return
+-
+-        now_t = datetime.datetime.now().time()
++            # For EXTREME_PANIC specifically: alert once per regime change,
++            # then continue to monitor_positions() so open trades are still
++            # managed. All other non-trade reasons skip everything.
++            if reason.startswith("EXTREME_PANIC") and self.regime != "EXTREME_PANIC":
++                self.regime = "EXTREME_PANIC"
++                self.s1_signals = []
++                self.execution.alert(
++                    f"🚨 *EXTREME PANIC — TRADING HALTED*\n"
++                    f"VIX: `{reason.split('_')[-1]}`\n"
++                    f"No new entries. Open positions monitored normally.\n"
++                    f"Engine resumes when VIX drops below `{VIX_EXTREME_STOP}`."
++                )
++            self.execution.monitor_positions()
++            return
++
++        now_t = now_ist().time()
+ 
+         # Re-check regime every 15 minutes + refresh circuit limits
+-        if datetime.datetime.now().minute % 15 == 0:
++        if now_ist().minute % 15 == 0:
+             new_regime = self.scanner.detect_regime()
+             if new_regime != self.regime:
++                prev_regime = self.regime
+                 self.execution.alert(
+@@ -298,3 +312,5 @@
+                 self.regime = new_regime
+-                if self.regime != "CHOP":
++                if self.regime == "EXTREME_PANIC":
++                    self.s1_signals = []
++                elif self.regime != "CHOP":
+                     self.s1_signals = self.scanner.scan_s1_ema_divergence(
+@@ -302,2 +318,9 @@
+                     )
++                    # Notify only when specifically recovering from EXTREME_PANIC
++                    if prev_regime == "EXTREME_PANIC":
++                        self.execution.alert(
++                            f"✅ *EXTREME PANIC CLEARED*\n"
++                            f"VIX back below `{VIX_EXTREME_STOP}` — "
++                            f"trading resumed. New regime: `{self.regime}`."
++                        )
+             # Save regime to state
+@@ -393,3 +416,3 @@
+         # If engine starts after 8:30 but before market open (recovery scenario)
+-        now = datetime.datetime.now().time()
++        now = now_ist().time()
+         if datetime.time(8, 31) <= now <= datetime.time(9, 14):

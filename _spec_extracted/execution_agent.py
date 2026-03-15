@@ -45,55 +45,6 @@ class ExecutionAgent:
         )
         print(f"[ExecutionAgent] Restored {len(open_positions)} positions from state")
 
-    def rearm_s1_exits(self):
-        """
-        Called at 9:15 AM (after pre-market, before 9:30 AM trading).
-        Re-places S1 partial and target limit orders for multi-day CNC holds.
-        SL-M is NOT placed for S1 (checked in memory at 3:15 PM instead).
-        Handles partially filled positions correctly by checking state.
-        """
-        for oid, trade in list(self.active_trades.items()):
-            if trade["strategy"] != "S1_EMA_DIVERGENCE":
-                continue
-            
-            # Re-place partial if not already filled
-            if not trade.get("partial_filled") and trade.get("partial_qty", 0) > 0:
-                try:
-                    p_oid = self.kite.place_order(
-                        variety=self.kite.VARIETY_REGULAR,
-                        exchange=self.kite.EXCHANGE_NSE,
-                        tradingsymbol=trade["symbol"],
-                        transaction_type=self.kite.TRANSACTION_TYPE_SELL,
-                        quantity=trade["partial_qty"],
-                        product=self.kite.PRODUCT_CNC,
-                        order_type=self.kite.ORDER_TYPE_LIMIT,
-                        price=round(trade.get("partial_target") or trade.get("partial_target_1"), 1),
-                        validity=self.kite.VALIDITY_DAY
-                    )
-                    trade["partial_oid"] = p_oid
-                except Exception as e:
-                    self.alert(f"⚠️ S1 Re-arm Partial Failed: `{trade['symbol']}`\n`{e}`")
-
-            # Re-place final target
-            try:
-                t_oid = self.kite.place_order(
-                    variety=self.kite.VARIETY_REGULAR,
-                    exchange=self.kite.EXCHANGE_NSE,
-                    tradingsymbol=trade["symbol"],
-                    transaction_type=self.kite.TRANSACTION_TYPE_SELL,
-                    quantity=trade.get("remaining_qty", trade["qty"]),
-                    product=self.kite.PRODUCT_CNC,
-                    order_type=self.kite.ORDER_TYPE_LIMIT,
-                    price=round(trade["target_price"], 1),
-                    validity=self.kite.VALIDITY_DAY
-                )
-                trade["target_oid"] = t_oid
-            except Exception as e:
-                self.alert(f"⚠️ S1 Re-arm Target Failed: `{trade['symbol']}`\n`{e}`")
-
-        # No need to persist state -> OIDs are intraday temporary
-        self.alert(f"🔫 *Rearmed exits* for `{len(self.active_trades)}` hold positions.")
-
     def execute(self, signal: dict, regime: str = "UNKNOWN") -> bool:
         signal["regime"] = regime
         approved, reason = self.risk.approve_trade(signal)
@@ -202,36 +153,13 @@ class ExecutionAgent:
 
     def monitor_positions(self):
         now = now_ist()
-
-        # Pre-fetch all current orders ONCE per tick.
-        # Kite API limit is ~10/sec, loop previously called 1/sec * open trades
-        try:
-            orders = self.kite.orders()
-            order_map = {str(o.get("order_id")): o for o in orders}
-        except Exception as e:
-            print(f"[Execution] Orders pre-fetch failed: {e}")
-            order_map = None  # Fallback to individual REST inside check_partial
-
         for oid, trade in list(self.active_trades.items()):
 
             # Check if partial fill has completed
             if not trade.get("partial_filled"):
-                if self.fill_monitor.check_partial_exit_filled(trade, order_map):
+                if self.fill_monitor.check_partial_exit_filled(trade):
                     trade["partial_filled"] = True
                     self.state.mark_partial_filled(oid, trade["remaining_qty"])
-
-                    # Immediately realise partial profit in risk agent today
-                    # instead of waiting for final leg close. Prevents false
-                    # daily_loss_limit stops.
-                    partial_px = trade.get("partial_target") or trade.get("partial_target_1")
-                    if partial_px:
-                        pnl = (partial_px - trade["entry_price"]) * trade["partial_qty"]
-                        trade["realised_pnl"] = trade.get("realised_pnl", 0.0) + pnl
-                        self.risk.daily_pnl += pnl
-                    
-                    # Update risk agent's open position qty reference
-                    if oid in self.risk.open_positions:
-                        self.risk.open_positions[oid]["qty"] = trade["remaining_qty"]
 
             if trade["strategy"] == "S2_OVERREACTION":
                 elapsed = (now - trade["entry_time"]).seconds / 60

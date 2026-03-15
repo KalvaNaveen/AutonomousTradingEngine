@@ -41,7 +41,7 @@ class DataAgent:
         self.daily_cache = daily_cache  # DailyCache — pre-market REST batch
         self.load_universe()
 
-    def load_universe(self, alert_fn=None):
+    def load_universe(self):
         """
         Loads NSE EQ instruments and hard-filters to
         Nifty50 + NiftyNext50 = 100 symbols.
@@ -57,18 +57,8 @@ class DataAgent:
             df          = df[df['tradingsymbol'].isin(target)]
             self.UNIVERSE = dict(zip(df['instrument_token'],
                                      df['tradingsymbol']))
-            expected = len(target)
-            loaded   = len(self.UNIVERSE)
-            missing  = target - set(self.UNIVERSE.values())
-            print(f"[DataAgent] Universe loaded: {loaded}/{expected} symbols")
-            if loaded < expected * 0.95:
-                msg = (f"⚠️ *UNIVERSE INCOMPLETE*\n"
-                       f"`{loaded}/{expected}` symbols loaded.\n"
-                       f"Missing: `{', '.join(sorted(missing)[:10])}`\n"
-                       f"Scans will miss these stocks.")
-                print(f"[DataAgent] WARNING: {msg}")
-                if alert_fn:
-                    alert_fn(msg)
+            print(f"[DataAgent] Universe loaded: "
+                  f"{len(self.UNIVERSE)}/100 symbols")
         except Exception as e:
             print(f"[DataAgent] Universe error: {e}")
             self.UNIVERSE = {}

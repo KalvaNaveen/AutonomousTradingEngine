@@ -32,8 +32,7 @@ from execution_agent import ExecutionAgent
 from kiteconnect import KiteTicker
 from config import (
     KITE_API_KEY, TOTAL_CAPITAL, NIFTY50_TOKEN, INDIA_VIX_TOKEN,
-    MAX_OPEN_POSITIONS, S1_MAX_HOLD_DAYS, S2_TIME_STOP_MINUTES,
-    PAPER_MODE, VIX_EXTREME_STOP, now_ist, today_ist
+    MAX_OPEN_POSITIONS, S1_MAX_HOLD_DAYS, S2_TIME_STOP_MINUTES
 )
 
 
@@ -275,9 +274,6 @@ class BNFEngine:
         else:
             self.execution.alert("⏸ CHOP regime. S1 inactive.")
 
-        # Re-arm yesterday's hold orders at the exchange
-        self.execution.rearm_s1_exits()
-
     # ── Every 60 seconds: main tick ──────────────────────────────
 
     def tick(self):
@@ -404,7 +400,6 @@ class BNFEngine:
     # ── Scheduler ─────────────────────────────────────────────────
 
     def run(self):
-        from config import PAPER_MODE
         mode = "PAPER" if PAPER_MODE else "LIVE"
         print(f"[BNF ENGINE v6] Starting. Mode: {mode}. "
               f"Capital: ₹{self.capital:,.0f}")

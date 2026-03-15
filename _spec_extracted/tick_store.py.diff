@@ -1,0 +1,170 @@
+--- project/tick_store.py
++++ spec/tick_store.py
+@@ -34,2 +34,4 @@
+ class TickStore:
++
++    STALE_THRESHOLD_SECS = 10   # price older than this is treated as stale
+ 
+@@ -46,5 +48,7 @@
+             "_current_candle": None,
++            "last_tick_at":    None,   # datetime of last received tick
+         })
+-        self._lock   = threading.Lock()
+-        self._ready  = False
++        self._lock         = threading.Lock()
++        self._ready        = False
++        self._last_tick_at = None   # most recent tick time across all tokens
+ 
+@@ -55,12 +59,22 @@
+         Called by KiteTicker on every tick event.
+-        Wire this directly: ticker.on_ticks = tick_store.on_ticks
+-        """
+-        with self._lock:
+-            for tick in ticks:
+-                token = tick.get("instrument_token")
+-                if not token:
+-                    continue
++        Lock held only per-token for price/depth writes.
++        Candle building happens outside the global lock to reduce contention.
++        """
++        candle_updates = []   # collected outside lock, processed after
++
++        for tick in ticks:
++            token = tick.get("instrument_token")
++            if not token:
++                continue
++
++            ltp = tick.get("last_price", 0)
++            vol = tick.get("last_quantity", 0)
++            ts  = tick.get("exchange_timestamp") or tick.get("last_trade_time")
++
++            # Write price/depth under lock — fast, no computation
++            with self._lock:
+                 s = self._store[token]
+-
+-                s["last_price"] = tick.get("last_price", s["last_price"])
++                if ltp:
++                    s["last_price"]    = ltp
++                    s["last_tick_at"]  = datetime.datetime.now()
+                 s["volume"]     = tick.get("volume", s["volume"])
+@@ -70,5 +84,5 @@
+                 if ohlc:
+-                    s["day_open"] = ohlc.get("open",  s["day_open"])
+-                    s["day_high"] = ohlc.get("high",  s["day_high"])
+-                    s["day_low"]  = ohlc.get("low",   s["day_low"])
++                    s["day_open"] = ohlc.get("open", s["day_open"])
++                    s["day_high"] = ohlc.get("high", s["day_high"])
++                    s["day_low"]  = ohlc.get("low",  s["day_low"])
+ 
+@@ -88,42 +102,40 @@
+ 
+-                # ── 5-min candle building ─────────────────────────────
+-                ltp = s["last_price"]
+-                vol = tick.get("last_quantity", 0)
+-                ts  = tick.get("exchange_timestamp") or tick.get("last_trade_time")
+-
+-                if ts and isinstance(ts, datetime.datetime) and ltp > 0:
+-                    bucket = _bucket_5min(ts)
+-                    cc     = s["_current_candle"]
+-
+-                    if cc is None or cc["bucket"] != bucket:
+-                        # Close previous candle
+-                        if cc is not None:
+-                            s["candles_5min"].append({
+-                                "open":   cc["open"],
+-                                "high":   cc["high"],
+-                                "low":    cc["low"],
+-                                "close":  cc["close"],
+-                                "volume": cc["volume"],
+-                            })
+-                            # Keep only last 80 candles (400 minutes — full session)
+-                            if len(s["candles_5min"]) > 80:
+-                                s["candles_5min"] = s["candles_5min"][-80:]
+-
+-                        # Start new candle
+-                        s["_current_candle"] = {
+-                            "bucket": bucket,
+-                            "open":   ltp,
+-                            "high":   ltp,
+-                            "low":    ltp,
+-                            "close":  ltp,
+-                            "volume": vol,
+-                        }
+-                    else:
+-                        # Update current candle
+-                        cc["high"]    = max(cc["high"], ltp)
+-                        cc["low"]     = min(cc["low"],  ltp)
+-                        cc["close"]   = ltp
+-                        cc["volume"] += vol
+-
+-            self._ready = True
++            # Queue candle update — processed below, lock not held
++            if ts and isinstance(ts, datetime.datetime) and ltp > 0:
++                candle_updates.append((token, ltp, vol, ts))
++
++        # Process candle updates — one lock acquisition per token
++        for token, ltp, vol, ts in candle_updates:
++            self._update_candle(token, ltp, vol, ts)
++
++        with self._lock:
++            self._ready        = True
++            self._last_tick_at = datetime.datetime.now()
++
++    def _update_candle(self, token: int, ltp: float,
++                       vol: int, ts: datetime.datetime):
++        """Update 5-min candle for one token. Acquires lock independently."""
++        bucket = _bucket_5min(ts)
++        with self._lock:
++            s  = self._store[token]
++            cc = s["_current_candle"]
++
++            if cc is None or cc["bucket"] != bucket:
++                if cc is not None:
++                    s["candles_5min"].append({
++                        "open":   cc["open"],  "high": cc["high"],
++                        "low":    cc["low"],   "close": cc["close"],
++                        "volume": cc["volume"],
++                    })
++                    if len(s["candles_5min"]) > 80:
++                        s["candles_5min"] = s["candles_5min"][-80:]
++                s["_current_candle"] = {
++                    "bucket": bucket, "open": ltp, "high": ltp,
++                    "low": ltp, "close": ltp, "volume": vol,
++                }
++            else:
++                cc["high"]    = max(cc["high"], ltp)
++                cc["low"]     = min(cc["low"],  ltp)
++                cc["close"]   = ltp
++                cc["volume"] += vol
+ 
+@@ -134,2 +146,30 @@
+             return self._store[token]["last_price"]
++
++    def get_ltp_if_fresh(self, token: int) -> float:
++        """
++        Returns LTP only if the last tick for this token arrived within
++        STALE_THRESHOLD_SECS seconds. Returns 0.0 if stale or never received.
++        ScannerAgent uses this — 0.0 triggers the REST fallback path.
++        During market hours, a 10-second-old price means the WebSocket
++        has disconnected. Using ghost prices can fire false signals.
++        """
++        with self._lock:
++            s       = self._store[token]
++            tick_at = s.get("last_tick_at")
++            ltp     = s["last_price"]
++        if tick_at is None:
++            return 0.0
++        age = (datetime.datetime.now() - tick_at).total_seconds()
++        return ltp if age <= self.STALE_THRESHOLD_SECS else 0.0
++
++    def is_fresh(self) -> bool:
++        """
++        True if any tick arrived within STALE_THRESHOLD_SECS globally.
++        Use this instead of is_ready() in scan paths — is_ready() stays
++        True permanently even after the WebSocket disconnects.
++        """
++        if self._last_tick_at is None:
++            return False
++        age = (datetime.datetime.now() - self._last_tick_at).total_seconds()
++        return age <= self.STALE_THRESHOLD_SECS
+ 

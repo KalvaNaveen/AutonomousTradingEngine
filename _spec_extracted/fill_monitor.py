@@ -224,48 +224,20 @@ class FillMonitor:
         self.state.save(trade["entry_oid"], trade)
         return trade
 
-    def check_partial_exit_filled(self, trade: dict,
-                                   order_map: dict = None) -> bool:
+    def check_partial_exit_filled(self, trade: dict) -> bool:
         """
         Called during position monitoring.
         Returns True if partial exit has filled — so we stop tracking that order.
-        Accepts order_map pre-fetched by monitor_positions — zero extra REST.
-        Falls back to get_order_status() (one REST call) if map not provided.
-        CRITICAL: Also reduces SL-M qty at exchange after partial fill.
+        Updates state and remaining_qty.
         """
         partial_oid = trade.get("partial_oid")
         if not partial_oid or trade.get("partial_filled"):
             return False
 
-        # Use pre-fetched order_map if available — avoids redundant kite.orders() call
-        if order_map and str(partial_oid) in order_map:
-            raw = order_map[str(partial_oid)]
-            status = {
-                "status":     raw.get("status", "UNKNOWN"),
-                "filled_qty": raw.get("filled_quantity", 0),
-            }
-        else:
-            status = self.get_order_status(partial_oid)
-            
+        status = self.get_order_status(partial_oid)
         if status["status"] == "COMPLETE":
             remaining = trade["remaining_qty"]
             self.state.mark_partial_filled(trade["entry_oid"], remaining)
             trade["partial_filled"] = True
-
-            # Reduce SL quantity to remaining shares
-            # Example: entry 100 shares, partial target filled 50,
-            # remaining = 50. SL-M must be modified to 50 or it will
-            # sell 100 when only 50 are held -> naked short.
-            if trade.get("sl_oid") and remaining > 0:
-                try:
-                    self.kite.modify_order(
-                        variety=self.kite.VARIETY_SL,
-                        order_id=trade["sl_oid"],
-                        quantity=remaining
-                    )
-                except Exception as e:
-                    print(f"[FillMonitor] SL modify after partial fill failed: {e}")
-                    # Non-fatal: log it. _check_exit_filled will still catch
-                    # the SL fill and clean up the trade correctly.
             return True
         return False

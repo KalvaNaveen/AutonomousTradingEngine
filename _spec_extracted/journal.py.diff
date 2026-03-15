@@ -1,0 +1,19 @@
+--- project/journal.py
++++ spec/journal.py
+@@ -2,3 +2,3 @@
+ import datetime
+-from config import JOURNAL_DB
++from config import JOURNAL_DB, now_ist, today_ist
+ 
+@@ -12,2 +12,6 @@
+         with sqlite3.connect(JOURNAL_DB) as conn:
++            # WAL mode for the same reason as state_manager — concurrent writes
++            # from the main thread and FillMonitor background threads.
++            conn.execute("PRAGMA journal_mode=WAL")
++            conn.execute("PRAGMA busy_timeout=3000")
+             conn.execute("""
+@@ -40,3 +44,3 @@
+     def log_trade(self, trade: dict):
+-        now  = datetime.datetime.now()
++        now  = now_ist()
+         et   = trade.get("entry_time") or now

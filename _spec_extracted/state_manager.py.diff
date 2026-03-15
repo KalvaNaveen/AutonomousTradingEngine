@@ -1,0 +1,57 @@
+--- project/state_manager.py
++++ spec/state_manager.py
+@@ -9,3 +9,3 @@
+ import json
+-from config import STATE_DB
++from config import STATE_DB, today_ist
+ 
+@@ -19,2 +19,8 @@
+         with sqlite3.connect(STATE_DB) as conn:
++            # WAL mode: allows concurrent reads alongside one writer.
++            # Prevents "database is locked" errors when the main thread,
++            # FillMonitor background threads, and WebSocket callbacks
++            # all attempt SQLite writes simultaneously.
++            conn.execute("PRAGMA journal_mode=WAL")
++            conn.execute("PRAGMA busy_timeout=3000")
+             conn.execute("""
+@@ -88,3 +94,3 @@
+                 _str(trade.get("entry_time", now)),
+-                _str(trade.get("entry_date", datetime.date.today())),
++                _str(trade.get("entry_date", today_ist())),
+                 trade.get("rvol", 0),
+@@ -132,6 +138,15 @@
+         """
+-        Called at startup. Returns all OPEN positions from today or later.
+-        Reconstructs trade dicts for the execution agent to resume monitoring.
++        Called at startup. Returns all OPEN positions that may still be active.
++
++        S1 (CNC swing) can be held up to S1_MAX_HOLD_DAYS = 3 nights.
++        Using entry_date >= today would miss Day-2 and Day-3 S1 positions
++        after a crash restart — the engine would have no record of them,
++        would not monitor stops, and would not count them against position limits.
++
++        Fix: look back S1_MAX_HOLD_DAYS days to catch all live swing positions.
++        MIS positions are always same-day so this is harmless for S2.
+         """
+-        today = datetime.date.today().isoformat()
++        from config import S1_MAX_HOLD_DAYS, today_ist
++        cutoff = (today_ist() -
++                  datetime.timedelta(days=S1_MAX_HOLD_DAYS)).isoformat()
+         with sqlite3.connect(STATE_DB) as conn:
+@@ -142,3 +157,3 @@
+                 ORDER BY entry_time ASC
+-            """, (today,)).fetchall()
++            """, (cutoff,)).fetchall()
+ 
+@@ -150,3 +165,4 @@
+             except Exception:
+-                entry_time = datetime.datetime.now()
++                from config import now_ist
++                entry_time = now_ist()
+ 
+@@ -156,3 +172,4 @@
+             except Exception:
+-                entry_date = datetime.date.today()
++                from config import today_ist
++                entry_date = today_ist()
+ 

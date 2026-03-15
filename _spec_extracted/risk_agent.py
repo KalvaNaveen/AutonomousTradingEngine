@@ -62,28 +62,12 @@ class RiskAgent:
         if oid not in self.open_positions:
             return 0.0
         pos = self.open_positions.pop(oid)
-
-        # Final leg only on remaining shares.
-        # pos["qty"] was already updated to remaining_qty after partial fill
-        # (set in monitor_positions when partial_filled detected).
-        final_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
-        self.daily_pnl += final_leg_pnl
-
-        # Total trade PnL = partial profit (already added to daily_pnl) + final leg.
-        # Win/loss streak uses NET result across all legs, not final leg alone.
-        # Without this: a trade that books +₹500 partial then gets stopped for
-        # -₹200 on remaining is a NET WIN but was counted as a loss (streak +1).
-        total_trade_pnl = pos.get("realised_pnl", 0.0) + final_leg_pnl
-        self.consecutive_losses = (0 if total_trade_pnl > 0
-                                   else self.consecutive_losses + 1)
-
-        self.daily_trades.append({
-            **pos,
-            "exit_price": exit_price,
-            "pnl":        total_trade_pnl,
-            "exit_time":  now_ist(),
-        })
-        return total_trade_pnl
+        pnl = (exit_price - pos["entry_price"]) * pos["qty"]
+        self.daily_pnl += pnl
+        self.consecutive_losses = 0 if pnl > 0 else self.consecutive_losses + 1
+        self.daily_trades.append({**pos, "exit_price": exit_price, "pnl": pnl,
+                                   "exit_time": now_ist()})
+        return pnl
 
     def get_daily_stats(self) -> dict:
         t = self.daily_trades

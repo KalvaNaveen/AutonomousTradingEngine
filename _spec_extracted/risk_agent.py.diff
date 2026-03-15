@@ -1,0 +1,16 @@
+--- project/risk_agent.py
++++ spec/risk_agent.py
+@@ -45,3 +45,7 @@
+     def calculate_position_size(self, entry: float, stop: float) -> int:
+-        risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT
++        # Shave 0.2% from the risk budget to absorb STT (0.1% sell-side on
++        # delivery), brokerage (~0.03% per leg), and typical limit-order
++        # slippage (~0.05%). On a 0.8% S2 stop this is material. On a 7%
++        # S1 stop it is negligible — but correct in both cases.
++        risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * 0.998
+         rps     = entry - stop
+@@ -64,3 +68,3 @@
+         self.daily_trades.append({**pos, "exit_price": exit_price, "pnl": pnl,
+-                                   "exit_time": datetime.datetime.now()})
++                                   "exit_time": now_ist()})
+         return pnl

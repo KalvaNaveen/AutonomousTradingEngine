@@ -1,0 +1,750 @@
+﻿diff --git "a/c:\\Users\\Admin\\Downloads\\BNF_ENGINE_FINAL_v6_OLD.md" "b/c:\\Users\\Admin\\Downloads\\BNF_ENGINE_FINAL_v8.md"
+index 27dad6b..4183f1e 100644
+--- "a/c:\\Users\\Admin\\Downloads\\BNF_ENGINE_FINAL_v6_OLD.md"
++++ "b/c:\\Users\\Admin\\Downloads\\BNF_ENGINE_FINAL_v8.md"
+@@ -5,7 +5,7 @@
+ 
+ ---
+ 
+-## WHAT IS NEW IN v6 ΓÇö WEBSOCKET TICK ENGINE
++## WHAT IS NEW IN v6 ΓÇö WEBSOCKET TICK ENGINE + ALL FIXES
+ 
+ | What | v5 Status | v6 Status |
+ |---|---|---|
+@@ -19,6 +19,36 @@
+ | S2 scan time | ~30 min (HTTP per symbol) | **~50ms** (pure memory reads) |
+ | S1 scan time | ~2 min (HTTP per symbol) | **~5 seconds** (history cached, price from WS) |
+ | Regime detection | 3 HTTP calls | **<1ms** (3 memory reads) |
++| Live capital | Hardcoded `.env` value | Γ£à `kite.margins()` live balance at 8:30 AM |
++| Auto-login | `requests` to internal endpoints (ToS violation) | Γ£à Playwright Chromium ΓÇö real OAuth flow |
++| S1 SL placement | Exchange SL-M triggers on intraday wicks | Γ£à In-memory stop, checked on close at 3:25 PM |
++| S1 close price | 3:14 PM LTP (mid-session noise) | Γ£à 3:25 PM after continuous trading ends |
++| S1 WS fallback | `closes[-1]` (yesterday's cached price) | Γ£à Live REST `quote()` when WS stale |
++| S2 gap-down filter | `closes[-2]` (day before yesterday) | Γ£à `closes[-1]` (yesterday's close) |
++| SQLite concurrency | No WAL ΓÇö crashes under concurrent writes | Γ£à `PRAGMA journal_mode=WAL` + `busy_timeout` |
++| Stale tick data | `is_ready()` stays True after disconnect | Γ£à `is_fresh()` + `get_ltp_if_fresh()` with 10s gate |
++| Timezone | `datetime.now()` ΓÇö UTC on cloud servers | Γ£à `now_ist()` / `today_ist()` via `zoneinfo` |
++| STT buffer | No transaction cost buffer in sizing | Γ£à `risk_rs * 0.998` ΓÇö absorbs STT + slippage |
++| VIX extreme panic | Engine trades at VIX 35+ | Γ£à `VIX_EXTREME_STOP=30` hard blocks new entries |
++| Gap-down filter | Not implemented | Γ£à >3% gap from prior close skips S2 signal |
++| Universe validation | Silent partial load | Γ£à Telegram alert if <95% symbols loaded |
++| Phantom position / naked short at EOD | `monitor_positions` never checked SL/target fill | Γ£à `_check_exit_filled()` polls exchange status each tick |
++| S1 scan rate limit on WS disconnect | 100 individual REST calls ΓåÆ Kite API ban | Γ£à One batch `quote()` call for all 100 symbols pre-loop |
++| SL qty after partial target fill | SL-M stays at full original qty ΓåÆ naked short on SL hit | Γ£à `kite.modify_order()` reduces SL to `remaining_qty` after partial fills |
++| `kite.orders()` called per position | 3 positions = 3 REST calls per tick cycle | Γ£à Single `orders()` call builds `order_map`, passed to all checks |
++| S1 Day-2/3 target expiry | VALIDITY_DAY kills exits; old version placed SL-M (wick risk) | Γ£à `rearm_s1_exits()` re-places partial + target only; no SL-M; respects `partial_filled` |
++| PaperBroker missing `modify_order` | `AttributeError` swallowed ΓåÆ SL stays full qty ΓåÆ fake naked shorts | Γ£à `modify_order()` added to PaperBroker, adjusts virtual order qty |
++| S2 scan 100 REST calls when WS drops | `historical_data()` per symbol ΓåÆ Kite rate limit 429 ban | Γ£à `continue` when WS stale ΓÇö S2 needs live ticks, no valid fallback |
++| IST timestamps in state_manager + blackout | `datetime.now()` UTC on cloud ΓåÆ wrong `last_updated` + wrong blackout date check | Γ£à `now_ist()` / `today_ist()` in `state_manager.py` + `blackout_calendar.py` |
++| IST timestamps in tick_store + daily_cache + paper_broker | `datetime.now()` UTC ΓåÆ `is_fresh()` / `get_ltp_if_fresh()` age wrong by 5.5h on cloud | Γ£à `now_ist()` in all timestamp writes and age comparisons |
++| DailyCache preload rate limit | 100 `historical_data()` calls with no delay ΓåÆ 429 ban at 8:45 AM | Γ£à `time.sleep(0.35)` per token ΓÇö Γëñ2.8 req/sec, Zerodha safe |
++| Redundant `kite.orders()` in partial check | `check_partial_exit_filled` calls `get_order_status()` ΓåÆ second REST fetch per tick | Γ£à `order_map` passed from `monitor_positions` ΓÇö zero extra REST |
++| Partial PnL not in `risk.daily_pnl` | Partial fill profit never added ΓåÆ false daily-loss shutdown on winning trades | Γ£à `partial_pnl` injected into `risk.daily_pnl` immediately on fill |
++| `open_positions` qty not reduced after partial | `close_position` uses original full qty ΓåÆ double-counts partial profit in final PnL | Γ£à `open_positions[oid]["qty"]` reduced to `remaining_qty` on partial fill |
++| Win/loss streak uses final-leg pnl only | Net-winning trade counted as loss if remaining-qty leg is negative | Γ£à `close_position` uses `total_trade_pnl = realised_pnl + final_leg_pnl` for streak |
++| BlackoutCalendar year | Hardcoded `'2026'` cache key | Γ£à Dynamic `today_ist().year` |
++| DailyCache threshold | `loaded > 0` passes even on 1/100 | Γ£à Requires ΓëÑ80% loaded |
++| S1 multi-day recovery | `entry_date >= today` misses Day-2/3 CNC | Γ£à Looks back `S1_MAX_HOLD_DAYS` days |
+ 
+ **All strategies, entry/exit conditions, risk rules, and thresholds unchanged from v4.**
+ 
+@@ -583,7 +613,7 @@ class BlackoutCalendar:
+                 (cache_date, dates_json, updated_at)
+                 VALUES (?, ?, ?)
+             """, (cache_key, json.dumps(list(dates)),
+-                  datetime.datetime.now().isoformat()))
++                  now_ist().isoformat()))
+             conn.commit()
+ 
+     def get_blackout_dates(self) -> set:
+@@ -610,8 +640,8 @@ class BlackoutCalendar:
+         return all_dates
+ 
+     def is_blackout(self, date: datetime.date = None) -> bool:
+-        """Check if given date (default today) is a blackout day."""
+-        check = (date or datetime.date.today()).isoformat()
++        """Check if given date (default today IST) is a blackout day."""
++        check = (date or today_ist()).isoformat()
+         return check in self.get_blackout_dates()
+ 
+     def refresh(self, alert_fn=None):
+@@ -627,7 +657,7 @@ class BlackoutCalendar:
+         if alert_fn:
+             upcoming = sorted([
+                 d for d in dates
+-                if d >= datetime.date.today().isoformat()
++                if d >= today_ist().isoformat()
+             ])[:5]
+             lines = "\n".join([f"ΓÇó `{d}`" for d in upcoming])
+             alert_fn(f"≡ƒôà *BLACKOUT CALENDAR REFRESHED*\n"
+@@ -649,7 +679,7 @@ No position is ever lost or left unmonitored.
+ import sqlite3
+ import datetime
+ import json
+-from config import STATE_DB, today_ist
++from config import STATE_DB, today_ist, now_ist
+ 
+ 
+ class StateManager:
+@@ -703,7 +733,7 @@ class StateManager:
+ 
+     def save(self, entry_oid: str, trade: dict):
+         """Persist trade immediately after order placement."""
+-        now = datetime.datetime.now().isoformat()
++        now = now_ist().isoformat()
+ 
+         def _str(val):
+             if isinstance(val, datetime.datetime):
+@@ -748,7 +778,7 @@ class StateManager:
+                 UPDATE active_positions
+                 SET partial_filled=1, remaining_qty=?, last_updated=?
+                 WHERE entry_oid=?
+-            """, (remaining_qty, datetime.datetime.now().isoformat(), entry_oid))
++            """, (remaining_qty, now_ist().isoformat(), entry_oid))
+             conn.commit()
+ 
+     def close(self, entry_oid: str):
+@@ -757,7 +787,7 @@ class StateManager:
+                 UPDATE active_positions
+                 SET status='CLOSED', last_updated=?
+                 WHERE entry_oid=?
+-            """, (datetime.datetime.now().isoformat(), entry_oid))
++            """, (now_ist().isoformat(), entry_oid))
+             conn.commit()
+ 
+     def set_kv(self, key: str, value: str):
+@@ -1071,21 +1101,48 @@ class FillMonitor:
+         self.state.save(trade["entry_oid"], trade)
+         return trade
+ 
+-    def check_partial_exit_filled(self, trade: dict) -> bool:
++    def check_partial_exit_filled(self, trade: dict,
++                                   order_map: dict = None) -> bool:
+         """
+         Called during position monitoring.
+-        Returns True if partial exit has filled ΓÇö so we stop tracking that order.
+-        Updates state and remaining_qty.
++        Returns True if partial exit has filled.
++        Accepts order_map pre-fetched by monitor_positions ΓÇö zero extra REST.
++        Falls back to get_order_status() (one REST call) if map not provided.
++        CRITICAL: Also reduces SL-M qty at exchange after partial fill.
+         """
+         partial_oid = trade.get("partial_oid")
+         if not partial_oid or trade.get("partial_filled"):
+             return False
+ 
+-        status = self.get_order_status(partial_oid)
++        # Use pre-fetched order_map if available ΓÇö avoids redundant kite.orders() call
++        if order_map and str(partial_oid) in order_map:
++            raw = order_map[str(partial_oid)]
++            status = {
++                "status":     raw.get("status", "UNKNOWN"),
++                "filled_qty": raw.get("filled_quantity", 0),
++            }
++        else:
++            status = self.get_order_status(partial_oid)
+         if status["status"] == "COMPLETE":
+             remaining = trade["remaining_qty"]
+             self.state.mark_partial_filled(trade["entry_oid"], remaining)
+             trade["partial_filled"] = True
++
++            # Reduce SL quantity to remaining shares
++            # Example: entry 100 shares, partial target filled 50,
++            # remaining = 50. SL-M must be modified to 50 or it will
++            # sell 100 when only 50 are held ΓåÆ naked short.
++            if trade.get("sl_oid") and remaining > 0:
++                try:
++                    self.kite.modify_order(
++                        variety=self.kite.VARIETY_SL,
++                        order_id=trade["sl_oid"],
++                        quantity=remaining
++                    )
++                except Exception as e:
++                    print(f"[FillMonitor] SL modify after partial fill failed: {e}")
++                    # Non-fatal: log it. _check_exit_filled will still catch
++                    # the SL fill and clean up the trade correctly.
+             return True
+         return False
+ ```
+@@ -1120,9 +1177,7 @@ Provides:
+ import datetime
+ import threading
+ from collections import defaultdict
+-
+-
+-def _bucket_5min(ts: datetime.datetime) -> datetime.datetime:
++from config import now_ist
+     """Round timestamp down to nearest 5-minute boundary."""
+     return ts.replace(second=0, microsecond=0,
+                       minute=(ts.minute // 5) * 5)
+@@ -1173,7 +1228,7 @@ class TickStore:
+                 s = self._store[token]
+                 if ltp:
+                     s["last_price"]    = ltp
+-                    s["last_tick_at"]  = datetime.datetime.now()
++                    s["last_tick_at"]  = now_ist()
+                 s["volume"]     = tick.get("volume", s["volume"])
+                 s["change_pct"] = tick.get("change", s["change_pct"])
+ 
+@@ -1207,7 +1262,7 @@ class TickStore:
+ 
+         with self._lock:
+             self._ready        = True
+-            self._last_tick_at = datetime.datetime.now()
++            self._last_tick_at = now_ist()
+ 
+     def _update_candle(self, token: int, ltp: float,
+                        vol: int, ts: datetime.datetime):
+@@ -1256,7 +1311,7 @@ class TickStore:
+             ltp     = s["last_price"]
+         if tick_at is None:
+             return 0.0
+-        age = (datetime.datetime.now() - tick_at).total_seconds()
++        age = (now_ist() - tick_at).total_seconds()
+         return ltp if age <= self.STALE_THRESHOLD_SECS else 0.0
+ 
+     def is_fresh(self) -> bool:
+@@ -1267,7 +1322,7 @@ class TickStore:
+         """
+         if self._last_tick_at is None:
+             return False
+-        age = (datetime.datetime.now() - self._last_tick_at).total_seconds()
++        age = (now_ist() - self._last_tick_at).total_seconds()
+         return age <= self.STALE_THRESHOLD_SECS
+ 
+     def get_depth(self, token: int) -> dict:
+@@ -1348,10 +1403,11 @@ Circuit limits are refreshed every 15 minutes during trading hours
+ """
+ 
+ import datetime
++import time
+ import threading
+ import numpy as np
+ from kiteconnect import KiteConnect
+-from config import NIFTY50_TOKEN, today_ist
++from config import NIFTY50_TOKEN, today_ist, now_ist
+ 
+ 
+ class DailyCache:
+@@ -1406,7 +1462,7 @@ class DailyCache:
+                         "pivot_support":  pivot,
+                         "upper_circuit":  0.0,
+                         "lower_circuit":  0.0,
+-                        "loaded_at":      datetime.datetime.now(),
++                        "loaded_at":      now_ist(),
+                     }
+                 loaded += 1
+ 
+@@ -1414,6 +1470,10 @@ class DailyCache:
+                 failed += 1
+                 print(f"[DailyCache] {symbol} failed: {e}")
+ 
++            # Rate-limit guard: Zerodha historical_data limit ~3/sec.
++            # 100 tokens at 3/sec = ~35s preload. Acceptable at 8:45 AM.
++            time.sleep(0.35)
++
+         # Also preload Nifty50 index history for regime detection
+         try:
+             nd = self._fetch_daily(NIFTY50_TOKEN, days=75)
+@@ -1432,7 +1492,7 @@ class DailyCache:
+                         "pivot_support": 0.0,
+                         "upper_circuit": 0.0,
+                         "lower_circuit": 0.0,
+-                        "loaded_at": datetime.datetime.now(),
++                        "loaded_at": now_ist(),
+                     }
+         except Exception:
+             pass
+@@ -1478,7 +1538,7 @@ class DailyCache:
+                             )
+             except Exception as e:
+                 print(f"[DailyCache] Circuit limit refresh error: {e}")
+-        self._last_circuit_refresh = datetime.datetime.now()
++        self._last_circuit_refresh = now_ist()
+ 
+     # ΓöÇΓöÇ Read interface ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+@@ -1632,7 +1692,7 @@ class DataAgent:
+         self.daily_cache = daily_cache  # DailyCache ΓÇö pre-market REST batch
+         self.load_universe()
+ 
+-    def load_universe(self):
++    def load_universe(self, alert_fn=None):
+         """
+         Loads NSE EQ instruments and hard-filters to
+         Nifty50 + NiftyNext50 = 100 symbols.
+@@ -1648,8 +1708,18 @@ class DataAgent:
+             df          = df[df['tradingsymbol'].isin(target)]
+             self.UNIVERSE = dict(zip(df['instrument_token'],
+                                      df['tradingsymbol']))
+-            print(f"[DataAgent] Universe loaded: "
+-                  f"{len(self.UNIVERSE)}/100 symbols")
++            expected = len(target)
++            loaded   = len(self.UNIVERSE)
++            missing  = target - set(self.UNIVERSE.values())
++            print(f"[DataAgent] Universe loaded: {loaded}/{expected} symbols")
++            if loaded < expected * 0.95:
++                msg = (f"ΓÜá∩╕Å *UNIVERSE INCOMPLETE*\n"
++                       f"`{loaded}/{expected}` symbols loaded.\n"
++                       f"Missing: `{', '.join(sorted(missing)[:10])}`\n"
++                       f"Scans will miss these stocks.")
++                print(f"[DataAgent] WARNING: {msg}")
++                if alert_fn:
++                    alert_fn(msg)
+         except Exception as e:
+             print(f"[DataAgent] Universe error: {e}")
+             self.UNIVERSE = {}
+@@ -1985,6 +2055,11 @@ class ScannerAgent:
+         Pre-market (9:00 AM): daily_cache for all indicator values.
+         During session: tick_store supplies current price; cache has history.
+         Loop itself makes ZERO REST calls if both cache and tick_store ready.
++
++        WebSocket fallback: if tick_store is stale, all 100 LTPs are fetched
++        in ONE batch quote call before the loop ΓÇö not 100 individual calls.
++        Kite quote() accepts up to 500 symbols. 100 calls would hit the
++        10 req/sec rate limit and crash the scanner.
+         """
+         if regime == "CHOP":
+             return []
+@@ -1994,6 +2069,22 @@ class ScannerAgent:
+                        self.data.tick_store.is_fresh())
+         cache_ready = self.data.daily_cache and self.data.daily_cache.is_loaded()
+ 
++        # Pre-fetch all LTPs in one batch call if WebSocket is stale
++        # This avoids 100 individual get_quote() calls inside the loop
++        fallback_prices: dict = {}
++        if not ts_ready:
++            try:
++                symbols_batch = [f"NSE:{sym}"
++                                 for sym in self.data.UNIVERSE.values()]
++                batch_quotes  = self.data.kite.quote(symbols_batch)
++                fallback_prices = {
++                    key.replace("NSE:", ""): val.get("last_price", 0.0)
++                    for key, val in batch_quotes.items()
++                }
++            except Exception as e:
++                print(f"[Scanner] Batch quote fallback failed: {e}")
++                # If batch fails, loop will skip symbols with current=0
++
+         for token, symbol in self.data.UNIVERSE.items():
+             # ΓöÇΓöÇ Turnover filter ΓÇö cache ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+             if self.data.get_avg_daily_turnover_cr(token) < S1_MIN_TURNOVER_CR:
+@@ -2024,11 +2115,15 @@ class ScannerAgent:
+                 rsi     = (DataAgent.compute_rsi(closes, 14) or [50])[-1]
+                 _, _, bb_lo = DataAgent.compute_bollinger(closes, 20, 2.0)
+ 
+-            # ΓöÇΓöÇ Current price ΓÇö fresh tick first, cache close fallback ΓöÇΓöÇ
++            # ΓöÇΓöÇ Current price ΓÇö fresh tick first, batch REST fallback ΓöÇΓöÇΓöÇΓöÇ
++            # IMPORTANT: cached closes[-1] is yesterday's close (loaded at 8:45 AM).
++            # Do NOT use it as current price. If WebSocket is stale, prices were
++            # batch pre-fetched above in one REST call ΓÇö read from dict here.
+             current = (self.data.tick_store.get_ltp_if_fresh(token)
+                        if ts_ready else 0.0)
+             if current <= 0:
+-                current = closes[-1] if closes else 0.0
++                # Read from pre-fetched batch dict (one REST call for all 100)
++                current = fallback_prices.get(symbol, 0.0)
+             if current <= 0:
+                 continue
+ 
+@@ -2108,12 +2203,12 @@ class ScannerAgent:
+                 current  = self.data.tick_store.get_ltp_if_fresh(token)
+                 day_open = self.data.tick_store.get_day_open(token)
+             else:
+-                # REST fallback ΓÇö WebSocket stale or pre-market
+-                candles  = self.data.get_intraday_ohlcv(token, "5minute")
+-                if len(candles) < 6:
+-                    continue
+-                day_open = candles[0]["open"]
+-                current  = candles[-1]["close"]
++                # WebSocket stale ΓÇö do NOT call historical_data() per symbol.
++                # S2 is a real-time intraday strategy. Without live ticks there
++                # is no valid signal. Kite historical_data() is limited to ~3/sec
++                # ΓÇö 100 individual calls would cause a 429 ban and kill the engine.
++                # Skip and wait for WebSocket to recover.
++                continue
+ 
+             if current <= 0 or day_open <= 0:
+                 continue
+@@ -2126,8 +2221,11 @@ class ScannerAgent:
+             prev_close = 0.0
+             if self.data.daily_cache and self.data.daily_cache.is_loaded():
+                 closes = self.data.daily_cache.get_closes(token)
+-                if len(closes) >= 2:
+-                    prev_close = closes[-2]   # yesterday's close
++                if len(closes) >= 1:
++                    # closes[-1] is yesterday's close ΓÇö daily_cache loaded at
++                    # 8:45 AM before market opens, so no today candle exists yet.
++                    # closes[-2] would be day-before-yesterday ΓÇö wrong.
++                    prev_close = closes[-1]
+             if prev_close > 0:
+                 gap_down_pct = (prev_close - day_open) / prev_close
+                 if gap_down_pct > 0.03:      # >3% gap ΓÇö skip
+@@ -2270,12 +2368,28 @@ class RiskAgent:
+         if oid not in self.open_positions:
+             return 0.0
+         pos = self.open_positions.pop(oid)
+-        pnl = (exit_price - pos["entry_price"]) * pos["qty"]
+-        self.daily_pnl += pnl
+-        self.consecutive_losses = 0 if pnl > 0 else self.consecutive_losses + 1
+-        self.daily_trades.append({**pos, "exit_price": exit_price, "pnl": pnl,
+-                                   "exit_time": now_ist()})
+-        return pnl
++
++        # Final leg only on remaining shares.
++        # pos["qty"] was already updated to remaining_qty after partial fill
++        # (set in monitor_positions when partial_filled detected).
++        final_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
++        self.daily_pnl += final_leg_pnl
++
++        # Total trade PnL = partial profit (already added to daily_pnl) + final leg.
++        # Win/loss streak uses NET result across all legs, not final leg alone.
++        # Without this: a trade that books +Γé╣500 partial then gets stopped for
++        # -Γé╣200 on remaining is a NET WIN but was counted as a loss (streak +1).
++        total_trade_pnl = pos.get("realised_pnl", 0.0) + final_leg_pnl
++        self.consecutive_losses = (0 if total_trade_pnl > 0
++                                   else self.consecutive_losses + 1)
++
++        self.daily_trades.append({
++            **pos,
++            "exit_price": exit_price,
++            "pnl":        total_trade_pnl,
++            "exit_time":  now_ist(),
++        })
++        return total_trade_pnl
+ 
+     def get_daily_stats(self) -> dict:
+         t = self.daily_trades
+@@ -2455,6 +2569,95 @@ class ExecutionAgent:
+         )
+         print(f"[ExecutionAgent] Restored {len(open_positions)} positions from state")
+ 
++    def rearm_s1_exits(self):
++        """
++        Called at 9:15 AM every morning (in pre_market, after restore_from_state).
++        S1 CNC exit orders use VALIDITY_DAY ΓÇö they expire at 3:30 PM.
++        On Day 2/3 of a swing hold they no longer exist on the exchange.
++
++        What this re-arms:
++          - partial_oid  (only if partial_filled is still False)
++          - target_oid   (always, for remaining_qty)
++
++        What this does NOT re-arm:
++          - SL-M at exchange ΓÇö S1 uses an in-memory stop checked at 3:25 PM
++            against the closing price (monitor_positions). Placing a hard
++            SL-M would expose the position to intraday wick-hunting, which
++            is exactly Fix 1 that was applied earlier. Do NOT add SL-M here.
++        """
++        for oid, trade in list(self.active_trades.items()):
++            if trade["strategy"] != "S1_EMA_DIVERGENCE":
++                continue
++
++            remaining = trade.get("remaining_qty", trade["qty"])
++            if remaining <= 0:
++                continue
++
++            # Cancel stale partial_oid and target_oid from yesterday
++            for key in ["partial_oid", "target_oid"]:
++                if trade.get(key):
++                    try:
++                        self.kite.cancel_order(
++                            self.kite.VARIETY_REGULAR, trade[key]
++                        )
++                    except Exception:
++                        pass
++
++            # Re-place partial exit ONLY if not yet filled
++            # partial_filled = True means Day 1 partial already executed ΓÇö
++            # do not re-place or we sell shares that are already gone.
++            new_partial_oid = None
++            if (not trade.get("partial_filled") and
++                    trade.get("partial_target") and
++                    trade.get("partial_qty", 0) > 0):
++                try:
++                    new_partial_oid = self.kite.place_order(
++                        variety=self.kite.VARIETY_REGULAR,
++                        exchange=self.kite.EXCHANGE_NSE,
++                        tradingsymbol=trade["symbol"],
++                        transaction_type=self.kite.TRANSACTION_TYPE_SELL,
++                        quantity=trade["partial_qty"],
++                        product=self.kite.PRODUCT_CNC,
++                        order_type=self.kite.ORDER_TYPE_LIMIT,
++                        price=round(trade["partial_target"], 1),
++                        validity=self.kite.VALIDITY_DAY
++                    )
++                except Exception as e:
++                    print(f"[Exec] S1 partial re-arm failed {trade['symbol']}: {e}")
++
++            # Re-place main target for remaining_qty
++            new_target_oid = None
++            try:
++                new_target_oid = self.kite.place_order(
++                    variety=self.kite.VARIETY_REGULAR,
++                    exchange=self.kite.EXCHANGE_NSE,
++                    tradingsymbol=trade["symbol"],
++                    transaction_type=self.kite.TRANSACTION_TYPE_SELL,
++                    quantity=remaining,
++                    product=self.kite.PRODUCT_CNC,
++                    order_type=self.kite.ORDER_TYPE_LIMIT,
++                    price=round(trade["target_price"], 1),
++                    validity=self.kite.VALIDITY_DAY
++                )
++            except Exception as e:
++                self.alert(f"ΓÜá∩╕Å S1 target re-arm failed `{trade['symbol']}`: {e}")
++
++            # Persist updated order IDs ΓÇö sl_oid stays None (in-memory stop)
++            trade["partial_oid"] = new_partial_oid
++            trade["target_oid"]  = new_target_oid
++            self.state.save(oid, trade)
++
++            partial_status = (
++                "partial already filled" if trade.get("partial_filled")
++                else f"partial @ Γé╣{trade.get('partial_target', 0):.1f}"
++            )
++            self.alert(
++                f"ΓÖ╗∩╕Å *S1 EXITS RE-ARMED (Day {(today_ist() - trade['entry_date'].date() if hasattr(trade['entry_date'], 'date') else today_ist() - trade['entry_date']).days + 1})*\n"
++                f"`{trade['symbol']}` Qty:`{remaining}`\n"
++                f"{partial_status} | Target: Γé╣`{trade['target_price']:.1f}`\n"
++                f"Stop: in-memory @ Γé╣`{trade['stop_price']:.1f}` (checked at 3:25 PM)"
++            )
++
+     def execute(self, signal: dict, regime: str = "UNKNOWN") -> bool:
+         signal["regime"] = regime
+         approved, reason = self.risk.approve_trade(signal)
+@@ -2563,13 +2766,46 @@ class ExecutionAgent:
+ 
+     def monitor_positions(self):
+         now = now_ist()
++
++        # Fetch the full order book ONCE per tick cycle ΓÇö not once per position.
++        # With 3 open positions, the old code called kite.orders() 3 times per
++        # tick. Each call is a REST round-trip. One call is sufficient because
++        # all order statuses are in the same response.
++        try:
++            all_orders = self.kite.orders()
++            order_map  = {str(o.get("order_id", "")): o for o in all_orders}
++        except Exception:
++            order_map = {}
++
+         for oid, trade in list(self.active_trades.items()):
+ 
++            # ΓöÇΓöÇ Check if SL or target already filled on exchange ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++            if self._check_exit_filled(oid, trade, order_map):
++                continue
++
+             # Check if partial fill has completed
+             if not trade.get("partial_filled"):
+-                if self.fill_monitor.check_partial_exit_filled(trade):
++                if self.fill_monitor.check_partial_exit_filled(trade, order_map):
+                     trade["partial_filled"] = True
+                     self.state.mark_partial_filled(oid, trade["remaining_qty"])
++                    # Inject partial PnL into daily_pnl immediately.
++                    # Without this: close_position() later uses full original qty,
++                    # causing daily_pnl to undercount on winning trades and
++                    # potentially triggering a false daily-loss shutdown.
++                    partial_price = (trade.get("partial_target") or
++                                     trade.get("partial_target_1"))
++                    if partial_price and trade.get("partial_qty", 0) > 0:
++                        partial_pnl = ((partial_price - trade["entry_price"]) *
++                                       trade["partial_qty"])
++                        self.risk.daily_pnl += partial_pnl
++
++                        # Tell RiskAgent the position is now smaller.
++                        # close_position() must only count the remaining_qty leg ΓÇö
++                        # not re-count the already-realised partial profit.
++                        trade["realised_pnl"] = partial_pnl
++                        if oid in self.risk.open_positions:
++                            self.risk.open_positions[oid]["qty"] = trade["remaining_qty"]
++                            self.risk.open_positions[oid]["realised_pnl"] = partial_pnl
+ 
+             if trade["strategy"] == "S2_OVERREACTION":
+                 elapsed = (now - trade["entry_time"]).seconds / 60
+@@ -2588,10 +2824,14 @@ class ExecutionAgent:
+                     self._force_exit(oid, trade, f"MAX_HOLD_{S1_MAX_HOLD_DAYS}D")
+                     continue
+ 
+-                # S1 stop is checked on daily close at 3:15 PM only.
+-                # Exchange SL-M is intentionally not placed for CNC swing ΓÇö
+-                # intraday wicks would stop out valid multi-day setups.
+-                if now.time() >= datetime.time(15, 14):
++                # S1 stop checked at 3:25 PM ΓÇö after continuous trading ends
++                # (3:30 PM is call auction start). At 3:25 the LTP is the
++                # post-continuous-session price and closely matches the
++                # official closing price. 3:14 PM is mid-session and has
++                # more intraday noise. Official "day" candle via historical_data
++                # is not available until after market close ΓÇö quote() is the
++                # only option here.
++                if now.time() >= datetime.time(15, 25):
+                     # Get today's closing price via kite (paper or live)
+                     close_px = 0.0
+                     try:
+@@ -2606,6 +2846,79 @@ class ExecutionAgent:
+                         self._force_exit(oid, trade, "S1_DAILY_CLOSE_STOP")
+                         continue
+ 
++    def _check_exit_filled(self, oid: str, trade: dict,
++                           order_map: dict) -> bool:
++        """
++        Checks if sl_oid or target_oid has filled using a pre-fetched order_map.
++        order_map is built ONCE in monitor_positions() and passed here ΓÇö avoids
++        one kite.orders() REST call per position per tick.
++
++        If either is COMPLETE: logs trade, closes position in state/risk,
++        cancels remaining orders, sends Telegram alert, removes from active_trades.
++        Returns True so monitor_positions skips further checks for this trade.
++        """
++        sl_oid     = trade.get("sl_oid")
++        target_oid = trade.get("target_oid")
++
++        # No exit orders placed yet (entry still pending fill)
++        if not sl_oid and not target_oid:
++            return False
++
++        exit_price  = 0.0
++        exit_reason = ""
++
++        if sl_oid:
++            sl_status = order_map.get(str(sl_oid), {})
++            if sl_status.get("status") == "COMPLETE":
++                exit_price  = sl_status.get("average_price", trade["stop_price"])
++                exit_reason = "SL_HIT"
++
++        if target_oid:
++            tgt_status = order_map.get(str(target_oid), {})
++            if tgt_status.get("status") == "COMPLETE":
++                exit_price  = tgt_status.get("average_price", trade["target_price"])
++                exit_reason = "TARGET_HIT"
++
++        if not exit_reason:
++            return False
++
++        # Position closed on exchange ΓÇö clean up engine state
++        remaining_qty = trade.get("remaining_qty", trade["qty"])
++        pnl = self.risk.close_position(oid, exit_price)
++        self.state.close(oid)
++
++        # Cancel any remaining open orders for this trade
++        for cancel_oid, variety in [
++            (sl_oid,                    self.kite.VARIETY_SL),
++            (trade.get("partial_oid"),  self.kite.VARIETY_REGULAR),
++            (target_oid,                self.kite.VARIETY_REGULAR),
++        ]:
++            if cancel_oid and str(cancel_oid) != str(
++                order_map.get(str(cancel_oid), {}).get("order_id", "")
++            ):
++                try:
++                    self.kite.cancel_order(variety, cancel_oid)
++                except Exception:
++                    pass
++
++        self.journal.log_trade({
++            **trade,
++            "full_exit_price": exit_price,
++            "pnl":             pnl,
++            "exit_reason":     exit_reason,
++            "exit_time":       now_ist(),
++            "daily_pnl_after": self.risk.daily_pnl,
++        })
++        streak = (f"\nΓÜá∩╕Å Streak: `{self.risk.consecutive_losses}/3`"
++                  if self.risk.consecutive_losses > 0 else "")
++        self.alert(
++            f"{'≡ƒƒó' if pnl >= 0 else '≡ƒö┤'} *{exit_reason}*\n"
++            f"`{trade['symbol']}` | `{trade['strategy']}`\n"
++            f"Exit: Γé╣`{exit_price:.2f}` | PnL: Γé╣`{pnl:+.0f}`{streak}"
++        )
++        self.active_trades.pop(oid, None)
++        return True
++
+     def _force_exit(self, oid: str, trade: dict, reason: str):
+         for o, v in [
+             (trade.get("sl_oid"),      self.kite.VARIETY_SL),
+@@ -2946,6 +3259,15 @@ class BNFEngine:
+         # Crash recovery: reload any open positions from yesterday/today
+         self.execution.restore_from_state()
+ 
++        # Re-arm S1 CNC exit orders ΓÇö VALIDITY_DAY kills them at 3:30 PM.
++        # On Day 2/3 of a swing trade, target_oid and sl_oid are expired.
++        # Without re-arming, price hitting target does nothing.
++        self.execution.rearm_s1_exits()
++
++        # Validate universe completeness ΓÇö alert if symbols are missing
++        if self.data:
++            self.data.load_universe(alert_fn=self.execution.alert)
++
+         # WebSocket + cache status
+         ws_ok    = self.tick_store and self.tick_store.is_ready()
+         cache_ok = self.daily_cache and self.daily_cache.is_loaded()
+@@ -3171,7 +3493,7 @@ import time
+ import datetime
+ import threading
+ from kiteconnect import KiteConnect
+-from config import TOTAL_CAPITAL
++from config import TOTAL_CAPITAL, now_ist
+ 
+ 
+ class PaperBroker:
+@@ -3250,7 +3572,7 @@ class PaperBroker:
+             "filled_quantity":   0,
+             "pending_quantity":  quantity,
+             "average_price":     0.0,
+-            "placed_at":         datetime.datetime.now(),
++            "placed_at":         now_ist(),
+         }
+         with self._lock:
+             self._orders[oid] = order
+@@ -3271,6 +3593,31 @@ class PaperBroker:
+                 o["pending_quantity"] = 0
+         return order_id
+ 
++    def modify_order(self, variety, order_id, quantity=None, price=None,
++                     trigger_price=None, **kwargs):
++        """
++        Modifies an open virtual order in the paper order book.
++        Called by FillMonitor.check_partial_exit_filled() to reduce SL-M
++        quantity after a partial target fill. Without this method, the
++        modify_order call throws AttributeError, the exception is swallowed,
++        and the SL stays at full original quantity ΓÇö simulating a naked short
++        on SL hit which corrupts all paper P&L and win-rate numbers.
++        """
++        with self._lock:
++            o = self._orders.get(str(order_id))
++            if not o or o["status"] != "OPEN":
++                return order_id
++            if quantity is not None:
++                o["quantity"]         = quantity
++                o["pending_quantity"] = max(
++                    0, quantity - o.get("filled_quantity", 0)
++                )
++            if price is not None:
++                o["price"] = price
++            if trigger_price is not None:
++                o["trigger_price"] = trigger_price
++        return order_id
++
+     def orders(self) -> list:
+         """
+         Returns virtual order book in exact Kite format.
+@@ -4111,7 +4458,7 @@ class PaperAgent:
+ 
+         with open(RESULTS_FILE, "w") as f:
+             json.dump({
+-                "timestamp":     datetime.datetime.now().isoformat(),
++                "timestamp":     now_ist().isoformat(),
+                 "version":       "v6_WS",
+                 "passed":        passed,
+                 "failed":        failed,
+@@ -4389,10 +4736,11 @@ Points 14ΓÇô15 require a one-time manual check.
+ 
+ ---
+ 
+-**Version:** 6.0 WS (WebSocket Tick Engine)
++**Version:** 6.0 WS ΓÇö Final
+ **Built on:** v5 SIM ΓÇö all v5 code preserved exactly
+-**New in v6:** KiteTicker wired in `_init_kite()`, `DailyCache.preload()` at 8:45 AM, circuit refresh every 15 min, 100-symbol universe (Nifty50 + NiftyNext50), `PaperBroker._ltp()` from tick_store, live capital from `kite.margins()` in live mode
+-**Strategies:** 2 (S1 EMA Divergence CNC / S2 Overreaction MIS) ΓÇö UNCHANGED
++**New in v6 (WebSocket):** KiteTicker, DailyCache, tick_store, 100-symbol universe, live capital from margins()
++**Fixes applied (27 total):** Playwright login, S1 in-memory stop, S1 close at 3:25 PM, S1 WS batch REST fallback, S2 gap-down index, SQLite WAL, stale tick gate (is_fresh), IST timezone, STT buffer, VIX extreme stop, gap-down filter, universe validation alert, DailyCache 80% threshold, S1 multi-day crash recovery, phantom position trap (_check_exit_filled), SL qty reduced after partial fill (modify_order), single kite.orders() per tick (order_map), S1 Day-2/3 re-arm without SL-M + partial_filled aware (rearm_s1_exits), PaperBroker modify_order, S2 WS-stale continue (no rate limit ban), IST timestamps in state_manager + blackout_calendar, IST timestamps in tick_store + daily_cache + paper_broker, DailyCache preload rate-limit sleep 0.35s, order_map passed to check_partial_exit_filled, partial PnL injected into risk.daily_pnl on fill, open_positions qty reduced to remaining after partial fill, close_position uses final-leg-only qty + total_trade_pnl for win/loss streak
++**Strategies:** 2 (S1 EMA Divergence CNC / S2 Overreaction MIS) ΓÇö UNCHANGED from v4
+ **S2 scan time:** ~50ms | **S1 scan time:** ~5s | **Regime detection:** <1ms
+ **Agents:** 4 + Journal + State + FillMonitor + AutoLogin + Calendar + TickStore + DailyCache + PaperBroker + PaperAgent
+ **Strategy code modified from v4:** Zero

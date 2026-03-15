@@ -1,0 +1,92 @@
+--- project/fill_monitor.py
++++ spec/fill_monitor.py
+@@ -13,3 +13,3 @@
+ from state_manager import StateManager
+-from config import FILL_POLL_INTERVAL_SEC, FILL_TIMEOUT_MINUTES
++from config import FILL_POLL_INTERVAL_SEC, FILL_TIMEOUT_MINUTES, now_ist
+ 
+@@ -45,6 +45,8 @@
+         Polls entry order until filled, partially filled+timeout, or timeout.
+-        Returns updated trade dict with actual filled qty and adjusted order IDs.
+-
+-        Called once per new trade, runs in blocking loop for up to
+-        FILL_TIMEOUT_MINUTES minutes.
++        On fill: places SL-M + partial + target orders for the first time.
++        On partial fill: places them at the actual filled quantity.
++        On timeout with zero fill: cancels entry, no position opened.
++
++        This is called from a background thread per trade.
++        SL and target are never placed before entry confirms — no naked short risk.
+         """
+@@ -52,5 +54,3 @@
+         symbol      = trade["symbol"]
+-        timeout_at  = datetime.datetime.now() + datetime.timedelta(
+-            minutes=FILL_TIMEOUT_MINUTES
+-        )
++        timeout_at  = now_ist() + datetime.timedelta(minutes=FILL_TIMEOUT_MINUTES)
+         product = (self.kite.PRODUCT_CNC if trade["product"] == "CNC"
+@@ -58,3 +58,3 @@
+ 
+-        while datetime.datetime.now() < timeout_at:
++        while now_ist() < timeout_at:
+             status = self.get_order_status(entry_oid)
+@@ -129,4 +129,5 @@
+         """
+-        After fill confirmation: cancel original SL/partial/target orders,
+-        re-place them with correct actual_qty.
++        Called after entry fill confirms.
++        Cancels any existing SL/target (None on first call, real oids on
++        partial-fill re-adjustment), then places correct-sized exit orders.
+         """
+@@ -134,3 +135,3 @@
+ 
+-        # Cancel all pending exit orders placed with original qty
++        # Cancel existing exit orders if any (partial fill re-adjustment path)
+         for oid_key, variety in [
+@@ -141,3 +142,3 @@
+             oid = trade.get(oid_key)
+-            if oid:
++            if oid:   # None on first call — skip
+                 try:
+@@ -150,18 +151,25 @@
+ 
+-        # Re-place SL with actual qty
+-        try:
+-            new_sl_oid = self.kite.place_order(
+-                variety=self.kite.VARIETY_SL,
+-                exchange=self.kite.EXCHANGE_NSE,
+-                tradingsymbol=symbol,
+-                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+-                quantity=actual_qty,
+-                product=product,
+-                order_type=self.kite.ORDER_TYPE_SLM,
+-                trigger_price=round(trade["stop_price"], 1),
+-                validity=self.kite.VALIDITY_DAY
+-            )
+-        except Exception as e:
+-            print(f"[FillMonitor] SL re-place failed: {e}")
+-            new_sl_oid = None
++        # S2 (MIS intraday): place hard SL-M at exchange — intraday stop is correct.
++        # S1 (CNC swing): DO NOT place exchange SL-M. India's large-caps wick
++        # 1-2% intraday routinely. A hard SL-M will fire on noise before the
++        # daily close confirms the stop is breached. S1 stop is held in memory
++        # and checked at 3:15 PM against the daily closing price. sl_oid stays
++        # None for S1 — monitor_positions() handles it via daily close check.
++        new_sl_oid = None
++        if trade.get("strategy") == "S2_OVERREACTION":
++            try:
++                new_sl_oid = self.kite.place_order(
++                    variety=self.kite.VARIETY_SL,
++                    exchange=self.kite.EXCHANGE_NSE,
++                    tradingsymbol=symbol,
++                    transaction_type=self.kite.TRANSACTION_TYPE_SELL,
++                    quantity=actual_qty,
++                    product=product,
++                    order_type=self.kite.ORDER_TYPE_SLM,
++                    trigger_price=round(trade["stop_price"], 1),
++                    validity=self.kite.VALIDITY_DAY
++                )
++            except Exception as e:
++                print(f"[FillMonitor] SL place failed: {e}")
++                new_sl_oid = None
+ 

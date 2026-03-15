@@ -1,0 +1,37 @@
+--- project/config.py
++++ spec/config.py
+@@ -3,2 +3,20 @@
+ load_dotenv()
++
++# ── Timezone ──────────────────────────────────────────────────
++# All datetime.now() calls must use IST regardless of server timezone.
++# On any cloud instance (AWS, GCP, Azure), the default is UTC.
++# UTC+5:30 = IST. Using zoneinfo (Python 3.9+, no extra install).
++from zoneinfo import ZoneInfo
++IST = ZoneInfo("Asia/Kolkata")
++
++
++def now_ist() -> "datetime.datetime":
++    """Return current datetime in IST. Use everywhere instead of datetime.now()."""
++    import datetime
++    return datetime.datetime.now(IST)
++
++
++def today_ist() -> "datetime.date":
++    """Return today's date in IST."""
++    return now_ist().date()
+ 
+@@ -14,2 +32,5 @@
+ KITE_ACCESS_TOKEN   = os.getenv("KITE_ACCESS_TOKEN")
++# Set this to the redirect URL configured in your Kite Connect app
++# console.zerodha.com → Apps → your app → Redirect URL
++KITE_REDIRECT_URL   = os.getenv("KITE_REDIRECT_URL", "https://127.0.0.1")
+ ZERODHA_USER_ID     = os.getenv("ZERODHA_USER_ID")
+@@ -49,2 +70,7 @@
+ VIX_BULL_MAX        = 15.0
++# Hard stop threshold — engine refuses all new entries above this.
++# At VIX 30+, market structure breaks down. Spreads widen, circuit breakers
++# trigger, intraday reversals become meaningless. No strategy edge exists.
++# Engine still monitors and exits open positions — it only blocks new entries.
++VIX_EXTREME_STOP    = 30.0
+ 

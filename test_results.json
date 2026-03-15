@@ -1,0 +1,80 @@
+{
+  "timestamp": "2026-03-15T17:34:27.061857",
+  "version": "v6_WS",
+  "passed": 15,
+  "failed": 0,
+  "total": 15,
+  "results": {
+    "auto_login": {
+      "status": "PASS",
+      "detail": "Token: DvMh7bOiO6..."
+    },
+    "blackout_calendar": {
+      "status": "PASS",
+      "detail": "26 dates. Next: ['2026-03-21', '2026-03-26', '2026-03-31']"
+    },
+    "websocket_connected": {
+      "status": "PASS",
+      "detail": "94/94 tokens have live LTP"
+    },
+    "daily_cache_preloaded": {
+      "status": "PASS",
+      "detail": "Spot-check passed for 5 tokens (EMA25, turnover, pivot all > 0)"
+    },
+    "tick_ltp_accuracy": {
+      "status": "PASS",
+      "detail": "All 5 tokens within 0.5% of HTTP LTP"
+    },
+    "paper_broker_ltp_cache": {
+      "status": "PASS",
+      "detail": "ABB: broker._ltp()=6392.5 == tick_store=6392.5 (cache hit confirmed)"
+    },
+    "paper_mode_active": {
+      "status": "PASS",
+      "detail": "Order intercepted as virtual: PAPER_03CDC7976E"
+    },
+    "crash_recovery": {
+      "status": "PASS",
+      "detail": "Position reloaded from DB after simulated crash"
+    },
+    "regime_detection_4tier": {
+      "status": "PASS",
+      "detail": "BEAR_PANIC (source: tick_store)"
+    },
+    "s1_scan": {
+      "status": "PASS",
+      "detail": "0 signals (source: daily_cache). Top: []"
+    },
+    "s2_scan": {
+      "status": "PASS",
+      "detail": "0 signals. Executed: 0. Virtual orders: 1"
+    },
+    "eod_time_stop": {
+      "status": "PASS",
+      "detail": "MIS position exited by 45-min time stop"
+    },
+    "consecutive_loss_shutdown": {
+      "status": "PASS",
+      "detail": "Blocked after 3 losses: 3_CONSECUTIVE_LOSSES"
+    },
+    "daily_loss_limit": {
+      "status": "PASS",
+      "detail": "Blocked at 3% loss: DAILY_LOSS_LIMIT \u20b915000"
+    },
+    "journal_write": {
+      "status": "PASS",
+      "detail": "Write confirmed. Total trades: 20"
+    }
+  },
+  "paper_summary": {
+    "total_orders": 2,
+    "filled": 2,
+    "cancelled": 0,
+    "open": 0,
+    "realised_pnl": 8170.0,
+    "available_margin": 506789.3,
+    "capital_deployed": -6789.3
+  },
+  "websocket": true,
+  "daily_cache": true
+}

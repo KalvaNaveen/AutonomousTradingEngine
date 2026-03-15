@@ -91,11 +91,6 @@ class ScannerAgent:
         Pre-market (9:00 AM): daily_cache for all indicator values.
         During session: tick_store supplies current price; cache has history.
         Loop itself makes ZERO REST calls if both cache and tick_store ready.
-
-        WebSocket fallback: if tick_store is stale, all 100 LTPs are fetched
-        in ONE batch quote call before the loop — not 100 individual calls.
-        Kite quote() accepts up to 500 symbols. 100 calls would hit the
-        10 req/sec rate limit and crash the scanner.
         """
         if regime == "CHOP":
             return []
@@ -104,22 +99,6 @@ class ScannerAgent:
         ts_ready    = (self.data.tick_store and
                        self.data.tick_store.is_fresh())
         cache_ready = self.data.daily_cache and self.data.daily_cache.is_loaded()
-
-        # Pre-fetch all LTPs in one batch call if WebSocket is stale
-        # This avoids 100 individual get_quote() calls inside the loop
-        fallback_prices: dict = {}
-        if not ts_ready:
-            try:
-                symbols_batch = [f"NSE:{sym}"
-                                 for sym in self.data.UNIVERSE.values()]
-                batch_quotes  = self.data.kite.quote(symbols_batch)
-                fallback_prices = {
-                    key.replace("NSE:", ""): val.get("last_price", 0.0)
-                    for key, val in batch_quotes.items()
-                }
-            except Exception as e:
-                print(f"[Scanner] Batch quote fallback failed: {e}")
-                # If batch fails, loop will skip symbols with current=0
 
         for token, symbol in self.data.UNIVERSE.items():
             # ── Turnover filter — cache ───────────────────────────────
@@ -151,15 +130,11 @@ class ScannerAgent:
                 rsi     = (DataAgent.compute_rsi(closes, 14) or [50])[-1]
                 _, _, bb_lo = DataAgent.compute_bollinger(closes, 20, 2.0)
 
-            # ── Current price — fresh tick first, batch REST fallback ──
-            # IMPORTANT: cached closes[-1] is yesterday's close (loaded at 8:45 AM).
-            # Do NOT use it as current price. If WebSocket is stale, prices were
-            # batch pre-fetched above in one REST call — read from dict here.
+            # ── Current price — fresh tick first, cache close fallback ──
             current = (self.data.tick_store.get_ltp_if_fresh(token)
                        if ts_ready else 0.0)
             if current <= 0:
-                # Read from pre-fetched batch dict (one REST call for all 100)
-                current = fallback_prices.get(symbol, 0.0)
+                current = closes[-1] if closes else 0.0
             if current <= 0:
                 continue
 
@@ -239,12 +214,12 @@ class ScannerAgent:
                 current  = self.data.tick_store.get_ltp_if_fresh(token)
                 day_open = self.data.tick_store.get_day_open(token)
             else:
-                # WebSocket stale — do NOT call historical_data() per symbol.
-                # S2 is a real-time intraday strategy. Without live ticks there
-                # is no valid signal. Kite historical_data() is limited to ~3/sec
-                # — 100 individual calls would cause a 429 ban and kill the engine.
-                # Skip and wait for WebSocket to recover.
-                continue
+                # REST fallback — WebSocket stale or pre-market
+                candles  = self.data.get_intraday_ohlcv(token, "5minute")
+                if len(candles) < 6:
+                    continue
+                day_open = candles[0]["open"]
+                current  = candles[-1]["close"]
 
             if current <= 0 or day_open <= 0:
                 continue
@@ -257,11 +232,8 @@ class ScannerAgent:
             prev_close = 0.0
             if self.data.daily_cache and self.data.daily_cache.is_loaded():
                 closes = self.data.daily_cache.get_closes(token)
-                if len(closes) >= 1:
-                    # closes[-1] is yesterday's close — daily_cache loaded at
-                    # 8:45 AM before market opens, so no today candle exists yet.
-                    # closes[-2] would be day-before-yesterday — wrong.
-                    prev_close = closes[-1]
+                if len(closes) >= 2:
+                    prev_close = closes[-2]   # yesterday's close
             if prev_close > 0:
                 gap_down_pct = (prev_close - day_open) / prev_close
                 if gap_down_pct > 0.03:      # >3% gap — skip

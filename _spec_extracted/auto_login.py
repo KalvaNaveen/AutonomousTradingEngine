@@ -97,37 +97,29 @@ class AutoLogin:
                     "TOTP field not found. Check if account uses PIN instead. "
                     "If so, use PIN in ZERODHA_TOTP_SECRET and adjust selector."
                 )
-
-            # Capture all requests to steal the redirect URL before Chrome
-            # replaces it with chrome-error://chromewebdata/
-            captured_urls = []
-            page.on("request", lambda req: captured_urls.append(req.url) if "request_token=" in req.url else None)
-
             page.fill(
                 'input[label="External TOTP"],'
                 'input[placeholder="TOTP"],'
                 'input[type="number"]',
                 self._get_fresh_totp()
             )
+            page.click('button[type="submit"]')
+
+            # 4 — Wait for redirect to your app URL containing request_token
             try:
-                page.click('button[type="submit"]', timeout=3000)
-            except Exception:
-                pass
-
-            # 4 — Wait for the intercepted request containing request_token
-            for _ in range(200):
-                if captured_urls:
-                    break
-                page.wait_for_timeout(100)
-
-            if not captured_urls:
+                page.wait_for_url(
+                    f"{KITE_REDIRECT_URL}**",
+                    timeout=20000
+                )
+            except PWTimeout:
+                # Check for error message on page
                 err = page.query_selector('.error-message, .flash-error')
                 err_text = err.inner_text() if err else "unknown"
                 raise RuntimeError(
                     f"Login redirect not received. Page error: {err_text}"
                 )
 
-            redirect_url = captured_urls[0]
+            redirect_url = page.url
             browser.close()
 
         # 5 — Extract request_token from redirect URL
