@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-15T17:34:27.061857",
+  "timestamp": "2026-03-17T00:35:23.777400",
   "version": "v6_WS",
   "passed": 15,
   "failed": 0,
@@ -7,7 +7,7 @@
   "results": {
     "auto_login": {
       "status": "PASS",
-      "detail": "Token: DvMh7bOiO6..."
+      "detail": "Token: eoWo5V8w3o..."
     },
     "blackout_calendar": {
       "status": "PASS",
@@ -15,7 +15,7 @@
     },
     "websocket_connected": {
       "status": "PASS",
-      "detail": "94/94 tokens have live LTP"
+      "detail": "156/156 tokens have live LTP"
     },
     "daily_cache_preloaded": {
       "status": "PASS",
@@ -27,11 +27,11 @@
     },
     "paper_broker_ltp_cache": {
       "status": "PASS",
-      "detail": "ABB: broker._ltp()=6392.5 == tick_store=6392.5 (cache hit confirmed)"
+      "detail": "ABB: broker._ltp()=6218.0 == tick_store=6218.0 (cache hit confirmed)"
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_03CDC7976E"
+      "detail": "Order intercepted as virtual: PAPER_C667E68A85"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -39,7 +39,7 @@
     },
     "regime_detection_4tier": {
       "status": "PASS",
-      "detail": "BEAR_PANIC (source: tick_store)"
+      "detail": "CHOP (source: tick_store)"
     },
     "s1_scan": {
       "status": "PASS",
@@ -63,7 +63,7 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 20"
+      "detail": "Write confirmed. Total trades: 34"
     }
   },
   "paper_summary": {
@@ -71,9 +71,9 @@
     "filled": 2,
     "cancelled": 0,
     "open": 0,
-    "realised_pnl": 8170.0,
-    "available_margin": 506789.3,
-    "capital_deployed": -6789.3
+    "realised_pnl": 8406.0,
+    "available_margin": 507010.9,
+    "capital_deployed": -7010.9
   },
   "websocket": true,
   "daily_cache": true

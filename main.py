@@ -64,6 +64,7 @@ class BNFEngine:
         self.regime     = "UNKNOWN"
         self.s1_signals = []
         self.token_ok   = False
+        self.scan_count = 0   # [v9] total S1+S2 scan cycles run today
 
     def _fetch_live_capital(self, real_kite: KiteConnect) -> float:
         """
@@ -111,11 +112,12 @@ class BNFEngine:
          10. ScannerAgent + ExecutionAgent wired
         """
         load_dotenv(override=True)
-        from config import KITE_ACCESS_TOKEN, PAPER_MODE
+        from config import PAPER_MODE
+        access_token = os.getenv("KITE_ACCESS_TOKEN")
 
         # 1 — real_kite always used for REST (data reads + order placement)
         real_kite = KiteConnect(api_key=KITE_API_KEY)
-        real_kite.set_access_token(KITE_ACCESS_TOKEN)
+        real_kite.set_access_token(access_token)
 
         # 2 — Capital: live Kite balance (live mode) or fixed .env (paper)
         self.capital = self._fetch_live_capital(real_kite)
@@ -141,7 +143,7 @@ class BNFEngine:
                 self.ticker.close()
             except Exception:
                 pass
-        self.ticker = KiteTicker(KITE_API_KEY, KITE_ACCESS_TOKEN)
+        self.ticker = KiteTicker(KITE_API_KEY, access_token)
         self.ticker.on_ticks   = self.tick_store.on_ticks
         self.ticker.on_connect = lambda ws, r: (
             ws.subscribe(sub_tokens),
@@ -261,6 +263,7 @@ class BNFEngine:
         # Pre-scan S1 candidates
         if self.regime != "CHOP":
             self.s1_signals = self.scanner.scan_s1_ema_divergence(self.regime)
+            n = len(self.s1_signals)
             if self.s1_signals:
                 lines = "\n".join([
                     f"• `{s['symbol']}` Dev:{s['deviation_pct']}% "
@@ -268,10 +271,11 @@ class BNFEngine:
                     for s in self.s1_signals[:5]
                 ])
                 self.execution.alert(
-                    f"🔍 *S1 WATCHLIST ({len(self.s1_signals)})*\n{lines}"
+                    f"🔍 *S1 SCAN: {n} signal{'s' if n != 1 else ''} found*\n"
+                    f"{lines}"
                 )
             else:
-                self.execution.alert("🔍 No S1 setups. S2 only.")
+                self.execution.alert("🔍 *S1 SCAN: 0 signals* — S2 only.")
         else:
             self.execution.alert("⏸ CHOP regime. S1 inactive.")
 
@@ -343,6 +347,20 @@ class BNFEngine:
 
         # S2: Live scan
         s2_signals = self.scanner.scan_s2_overreaction()
+        self.scan_count += 1   # [v9] count every S2 scan cycle
+
+        # [v9] Alert on every S2 scan that produces signals
+        if s2_signals:
+            lines = "\n".join([
+                f"• `{s['symbol']}` RVOL:{s['rvol']:.1f}x "
+                f"Drop:{s['drop_pct']:.1f}%"
+                for s in s2_signals[:3]
+            ])
+            self.execution.alert(
+                f"⚡ *S2 SCAN: {len(s2_signals)} signal"
+                f"{'s' if len(s2_signals) != 1 else ''}*\n{lines}"
+            )
+
         for sig in s2_signals:
             if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
                 s1_open = sum(
@@ -361,7 +379,9 @@ class BNFEngine:
     def end_of_day(self):
         if not self.execution:
             return
-        self.execution.daily_summary_alert(self.regime)
+        self.execution.daily_summary_alert(self.regime,
+                                            total_scans=self.scan_count)
+        self.scan_count = 0   # [v9] reset daily counter
 
         # Tomorrow's watchlist
         tmr = self.scanner.scan_s1_ema_divergence(self.regime)
@@ -379,7 +399,7 @@ class BNFEngine:
                 f"Realised PnL: ₹`{s['realised_pnl']:+,.2f}`\n"
                 f"Margin deployed: ₹`{s['capital_deployed']:,.0f}`"
             )
-        self.execution.alert("🔴 *BNF ENGINE v6 — MARKET CLOSED*")
+        self.execution.alert("🔴 *BNF ENGINE v9 — MARKET CLOSED*")
 
     # ── Helper ────────────────────────────────────────────────────
 
@@ -403,10 +423,83 @@ class BNFEngine:
 
     # ── Scheduler ─────────────────────────────────────────────────
 
+    def _build_period_summary_msg(self, title: str,
+                                   from_date: str, to_date: str) -> str:
+        """
+        [v9] Build a clean Markdown table summary for a date range.
+        Used by both weekly_summary() and monthly_summary().
+        """
+        if not self.journal:
+            return f"{title}\n_(journal not ready)_"
+        s = self.journal.get_period_summary(from_date, to_date)
+
+        # Top-5 symbols table
+        top5_lines = ""
+        if s["top5_symbols"]:
+            top5_lines = "\n\n*🏆 Top 5 by PnL:*\n"
+            top5_lines += "```\n"
+            top5_lines += f"{'Symbol':<12} {'PnL':>10}\n"
+            top5_lines += f"{'-'*12} {'-'*10}\n"
+            for sym, pnl in s["top5_symbols"]:
+                top5_lines += f"{sym:<12} ₹{pnl:>+,.0f}\n"
+            top5_lines += "```"
+
+        pnl_sign = "📈" if s["gross_pnl"] >= 0 else "📉"
+        return (
+            f"📅 *{title}*\n"
+            f"`{from_date}` → `{to_date}`\n\n"
+            f"```\n"
+            f"{'Trades':<18} {s['total']:>6}\n"
+            f"{'Wins / Losses':<18} {s['wins']:>3} / {s['losses']:<3}\n"
+            f"{'Win Rate':<18} {s['win_rate']:>5.1f}%\n"
+            f"{'Gross PnL':<18} ₹{s['gross_pnl']:>+,.0f}\n"
+            f"{'Best Regime':<18} {s['best_regime']:>8}\n"
+            f"{'Worst Regime':<18} {s['worst_regime']:>8}\n"
+            f"```"
+            f"\n{pnl_sign} Net: ₹`{s['gross_pnl']:+,.0f}`"
+            f"{top5_lines}"
+        )
+
+    def weekly_summary(self):
+        """
+        [v9] Every Sunday at 16:00 IST.
+        Sends a Markdown table of the past 7 trading days to Telegram.
+        """
+        if not self.execution:
+            return
+        today     = today_ist()
+        from_date = (today - datetime.timedelta(days=6)).isoformat()
+        to_date   = today.isoformat()
+        msg = self._build_period_summary_msg(
+            "BNF ENGINE v9 — WEEKLY SUMMARY", from_date, to_date
+        )
+        self.execution.alert(msg)
+        print(f"[Engine] Weekly summary sent: {from_date} → {to_date}")
+
+    def monthly_summary(self):
+        """
+        [v9] 1st of month at 16:00 IST.
+        Sends a Markdown table of the prior calendar month to Telegram.
+        """
+        if not self.execution:
+            return
+        today = today_ist()
+        # Last month: go back to the 1st of the previous month
+        first_this_month = today.replace(day=1)
+        last_month_end   = first_this_month - datetime.timedelta(days=1)
+        last_month_start = last_month_end.replace(day=1)
+        from_date = last_month_start.isoformat()
+        to_date   = last_month_end.isoformat()
+        msg = self._build_period_summary_msg(
+            "BNF ENGINE v9 — MONTHLY SUMMARY", from_date, to_date
+        )
+        self.execution.alert(msg)
+        print(f"[Engine] Monthly summary sent: {from_date} → {to_date}")
+
     def run(self):
         from config import PAPER_MODE
         mode = "PAPER" if PAPER_MODE else "LIVE"
-        print(f"[BNF ENGINE v6] Starting. Mode: {mode}. "
+        print(f"[BNF ENGINE v9] Starting. Mode: {mode}. "
               f"Capital: ₹{self.capital:,.0f}")
 
         # Schedule all tasks
@@ -417,6 +510,12 @@ class BNFEngine:
         schedule.every(1).minutes.do(self.tick)
         schedule.every().day.at("15:30").do(self.end_of_day)
         schedule.every().monday.at("08:00").do(self.refresh_calendar)
+        # [v9] Weekly summary — every Sunday at 16:00 IST
+        schedule.every().sunday.at("16:00").do(self.weekly_summary)
+        # [v9] Monthly summary — every day at 16:00; fires only on 1st of month
+        schedule.every().day.at("16:00").do(
+            lambda: self.monthly_summary() if today_ist().day == 1 else None
+        )
 
         # If engine starts after 8:30 but before market open (recovery scenario)
         now = now_ist().time()

@@ -174,8 +174,10 @@ class ExecutionAgent:
         rr = ((signal["target_price"] - signal["entry_price"]) /
               max(signal["entry_price"] - signal["stop_price"], 0.01))
 
+        strat_label = ("S1" if signal["strategy"] == "S1_EMA_DIVERGENCE"
+                       else "S2")
         self.alert(
-            f"🟢 *ENTRY — BNF v6*\n"
+            f"🟢 *EXECUTED {strat_label} — Qty:{qty} | R:R {rr:.2f}*\n"
             f"`{signal['symbol']}` | `{regime}` | `{signal['strategy']}`\n"
             f"Entry: ₹`{signal['entry_price']:.2f}` | Qty: `{qty}`\n"
             f"Partial: ₹`{partial_price:.2f if partial_price else 0}`\n"
@@ -317,7 +319,7 @@ class ExecutionAgent:
         )
         self.active_trades.pop(oid, None)
 
-    def daily_summary_alert(self, regime: str):
+    def daily_summary_alert(self, regime: str, total_scans: int = 0):
         stats = self.risk.get_daily_stats()
         self.journal.log_daily_summary(
             stats, regime,
@@ -330,14 +332,29 @@ class ExecutionAgent:
                 f"• `{r[0]}`: {r[2]}% WR | ₹{r[3]} avg | {r[1]} trades"
                 for r in regime_data
             ])
+
+        # Top 3 actions of the day
+        top_actions = self.journal.get_today_top_actions(n=3)
+        top_lines = ""
+        if top_actions:
+            top_lines = "\n*🏆 Top 3 actions today:*\n" + "\n".join([
+                f"• `{a['symbol']}` {a['strategy']} "
+                f"₹`{a['gross_pnl']:+,.0f}` ({a['exit_reason']})"
+                for a in top_actions
+            ])
+
+        scans_line = f"\n🔄 Scans run today: `{total_scans}`" if total_scans else ""
+
         self.alert(
-            f"📊 *BNF ENGINE v6 — DAILY SUMMARY*\n"
+            f"📊 *BNF ENGINE v9 — DAILY SUMMARY*\n"
             f"`{today_ist()}` | Regime: `{regime}`\n"
             f"Trades: `{stats['total']}` | "
             f"W:`{stats['wins']}` L:`{stats['losses']}` | "
             f"WR:`{stats['win_rate']:.1f}%`\n"
             f"PnL: ₹`{stats['gross_pnl']:+,.0f}`\n"
             f"Streak: `{stats['loss_streak']}/3`"
+            f"{scans_line}"
+            f"{top_lines}"
             f"{regime_lines}"
         )
 

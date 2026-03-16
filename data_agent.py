@@ -1,37 +1,33 @@
 import datetime
+import io
+import requests  # type: ignore
 import numpy as np
 import pandas as pd
 from kiteconnect import KiteConnect
-from config import *
+from config import *  # type: ignore
+from config import today_ist, INDIA_VIX_TOKEN
 
 
 class DataAgent:
-    UNIVERSE = {}
+    UNIVERSE: dict[int, str] = {}
 
-    NIFTY50_SYMBOLS = [
-        "RELIANCE", "TCS", "HDFCBANK", "INFY", "HINDUNILVR",
-        "ICICIBANK", "KOTAKBANK", "SBIN", "BHARTIARTL", "ITC",
-        "AXISBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
-        "BAJFINANCE", "MARUTI", "SUNPHARMA", "TITAN", "POWERGRID",
-        "NTPC", "ULTRACEMCO", "TECHM", "NESTLEIND", "BAJAJFINSV",
-        "ONGC", "TATAMOTORS", "TATASTEEL", "ADANIENT", "ADANIPORTS",
-        "COALINDIA", "DIVISLAB", "DRREDDY", "EICHERMOT", "GRASIM",
-        "HEROMOTOCO", "HINDALCO", "JSWSTEEL", "M&M", "CIPLA",
-        "BRITANNIA", "APOLLOHOSP", "BPCL", "SBILIFE", "HDFCLIFE",
-        "INDUSINDBK", "BAJAJ-AUTO", "TATACONSUM", "UPL", "SHREECEM"
-    ]
+    INDEX_URLS = {
+        "NIFTY50": "https://niftyindices.com/IndexConstituent/ind_nifty50list.csv",
+        "NIFTYNEXT50": "https://niftyindices.com/IndexConstituent/ind_niftynext50list.csv",
+        "BANKNIFTY": "https://niftyindices.com/IndexConstituent/ind_niftybanklist.csv",
+        "IT": "https://niftyindices.com/IndexConstituent/ind_niftyitlist.csv",
+        "PHARMA": "https://niftyindices.com/IndexConstituent/ind_niftypharmalist.csv",
+        "AUTO": "https://niftyindices.com/IndexConstituent/ind_niftyautolist.csv",
+        "FINANCE": "https://niftyindices.com/IndexConstituent/ind_niftyfinancelist.csv",
+        "CONSUMER_DURABLES": "https://niftyindices.com/IndexConstituent/ind_niftyconsumerdurableslist.csv",
+        "FMCG": "https://niftyindices.com/IndexConstituent/ind_niftyfmcglist.csv"
+    }
 
-    NIFTYNEXT50_SYMBOLS = [
-        "ABB", "ADANIGREEN", "ADANITRANS", "AMBUJACEM", "APLAPOLLO",
-        "ATGL", "BAJAJHLDNG", "BANKBARODA", "BEL", "BHEL",
-        "BOSCHLTD", "CANBK", "CHOLAFIN", "COLPAL", "DABUR",
-        "DLF", "DMART", "GAIL", "GODREJCP", "HAVELLS",
-        "ICICIPRULI", "INDUSTOWER", "IRCTC", "JINDALSTEL", "LICI",
-        "LTIM", "LTTS", "LUPIN", "MARICO", "MCDOWELL-N",
-        "MPHASIS", "NAUKRI", "NHPC", "NMDC", "OFSS",
-        "PAGEIND", "PEL", "PIIND", "PNB", "RECLTD",
-        "SIEMENS", "SRF", "TATACOMM", "TATAPOWER", "TORNTPHARM",
-        "TRENT", "VBL", "VEDL", "ZYDUSLIFE", "ZOMATO"
+    FALLBACK_SYMBOLS = [
+        # Crucial Nifty50/NiftyNext50 baseline if all APIs fail entirely
+        "RELIANCE", "TCS", "HDFCBANK", "INFY", "HINDUNILVR", "ICICIBANK", "KOTAKBANK",
+        "SBIN", "BHARTIARTL", "ITC", "AXISBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
+        "BAJFINANCE", "MARUTI", "SUNPHARMA", "TITAN", "NTPC", "TATAMOTORS"
     ]
 
     def __init__(self, kite: KiteConnect,
@@ -41,11 +37,23 @@ class DataAgent:
         self.daily_cache = daily_cache  # DailyCache — pre-market REST batch
         self.load_universe()
 
+    def _fetch_index_csv(self, url: str) -> list:
+        try:
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            if r.status_code == 200:
+                df = pd.read_csv(io.StringIO(r.text))
+                if 'Symbol' in df.columns:
+                    return df['Symbol'].tolist()
+        except Exception as e:
+            print(f"[DataAgent] Fetch failed for {url}: {e}")
+        return []
+
     def load_universe(self, alert_fn=None):
         """
-        Loads NSE EQ instruments and hard-filters to
-        Nifty50 + NiftyNext50 = 100 symbols.
-        Full NSE universe (~2000 symbols) never scanned.
+        Loads NSE EQ instruments and filters to dynamically fetched active Nifty 
+        index constituents from niftyindices.com.
+        Set-deduplication ensures no duplicate tokens.
+        If fetch fails, falls back to static hardcoded lists.
         One HTTP call at startup. Done.
         """
         try:
@@ -53,18 +61,34 @@ class DataAgent:
             df          = pd.DataFrame(instruments)
             df          = df[(df['instrument_type'] == 'EQ') &
                              (df['segment'] == 'NSE')]
-            target      = set(self.NIFTY50_SYMBOLS + self.NIFTYNEXT50_SYMBOLS)
+            
+            target_list = []
+            failed_fetches: int = 0
+            for label, url in self.INDEX_URLS.items():
+                symbols = self._fetch_index_csv(url)
+                if symbols:
+                    target_list.extend(symbols)
+                else:
+                    failed_fetches = int(failed_fetches + 1)  # type: ignore
+            
+            if failed_fetches == len(self.INDEX_URLS):
+                print("[DataAgent] CRITICAL: ALL dynamic index fetches failed. Using fallback array.")
+                target_list = self.FALLBACK_SYMBOLS
+                
+            target = set(target_list)
+            
             df          = df[df['tradingsymbol'].isin(target)]
-            self.UNIVERSE = dict(zip(df['instrument_token'],
-                                     df['tradingsymbol']))
+            self.UNIVERSE = {int(k): str(v) for k, v in zip(df['instrument_token'], df['tradingsymbol'])}
             expected = len(target)
             loaded   = len(self.UNIVERSE)
             missing  = target - set(self.UNIVERSE.values())
-            print(f"[DataAgent] Universe loaded: {loaded}/{expected} symbols")
+            missing_list = sorted(list(missing))
+            print(f"[DataAgent] Universe loaded: {loaded}/{expected} symbols "
+                  f"(post-dedup unique tokens: {loaded})")
             if loaded < expected * 0.95:
                 msg = (f"⚠️ *UNIVERSE INCOMPLETE*\n"
                        f"`{loaded}/{expected}` symbols loaded.\n"
-                       f"Missing: `{', '.join(sorted(missing)[:10])}`\n"
+                       f"Missing: `{', '.join(missing_list[:10])}`\n"
                        f"Scans will miss these stocks.")
                 print(f"[DataAgent] WARNING: {msg}")
                 if alert_fn:
@@ -244,7 +268,7 @@ class DataAgent:
             total   = adv + dec
             return adv / total if total > 0 else 0.5
         try:
-            tokens = [f"NSE:{s}" for s in self.NIFTY50_SYMBOLS]
+            tokens = [f"NSE:{s}" for s in self.FALLBACK_SYMBOLS]
             quotes = self.kite.quote(tokens)
             adv    = sum(1 for q in quotes.values() if q.get("change", 0) > 0)
             return adv / len(quotes) if quotes else 0.5

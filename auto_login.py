@@ -155,7 +155,8 @@ class AutoLogin:
             token = self.login()
             msg   = (f"✅ *AUTO LOGIN SUCCESS*\n"
                      f"Token: `{token[:10]}...`\n"
-                     f"Engine armed for 9:30 AM.")
+                     f"Engine armed for 9:30 AM.\n"
+                     f"Universe: ~160 tokens | v9")
             if alert_fn:
                 alert_fn(msg)
             print(f"[AutoLogin] Success — {token[:10]}...")

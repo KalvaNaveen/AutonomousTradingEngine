@@ -96,3 +96,72 @@ class Journal:
                        ROUND(AVG(gross_pnl),2) avg_pnl
                 FROM trades GROUP BY regime ORDER BY win_rate DESC
             """).fetchall()
+
+    def get_period_summary(self, from_date: str, to_date: str) -> dict:
+        """
+        Returns aggregated stats for a date range (weekly / monthly summaries).
+        from_date / to_date: ISO strings "YYYY-MM-DD" (inclusive).
+        """
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            rows = conn.execute("""
+                SELECT gross_pnl, strategy, regime, symbol
+                FROM trades
+                WHERE date >= ? AND date <= ?
+            """, (from_date, to_date)).fetchall()
+
+        if not rows:
+            return {
+                "total": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
+                "gross_pnl": 0.0, "best_regime": "—", "worst_regime": "—",
+                "top5_symbols": [],
+            }
+
+        total      = len(rows)
+        wins       = sum(1 for r in rows if r[0] > 0)
+        gross_pnl  = sum(r[0] for r in rows)
+        win_rate   = wins / total * 100 if total > 0 else 0.0
+
+        # Regime PnL breakdown
+        regime_pnl: dict = {}
+        for pnl, _strat, regime, _sym in rows:
+            regime_pnl[regime] = regime_pnl.get(regime, 0.0) + pnl
+        best_regime  = max(regime_pnl, key=regime_pnl.get) if regime_pnl else "—"
+        worst_regime = min(regime_pnl, key=regime_pnl.get) if regime_pnl else "—"
+
+        # Top 5 symbols by total PnL
+        sym_pnl: dict = {}
+        for pnl, _strat, _regime, sym in rows:
+            sym_pnl[sym] = sym_pnl.get(sym, 0.0) + pnl
+        top5 = sorted(sym_pnl.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        return {
+            "total":        total,
+            "wins":         wins,
+            "losses":       total - wins,
+            "win_rate":     round(win_rate, 1),
+            "gross_pnl":    round(gross_pnl, 2),
+            "best_regime":  best_regime,
+            "worst_regime": worst_regime,
+            "top5_symbols": top5,
+        }
+
+    def get_today_top_actions(self, date_str: str = None, n: int = 3) -> list:
+        """
+        Returns the top-n trades for a given date, sorted by abs(gross_pnl).
+        Used in the daily EOD summary Telegram message.
+        Returns list of dicts: [{symbol, strategy, gross_pnl, exit_reason}, ...]
+        """
+        d = date_str or today_ist().isoformat()
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            rows = conn.execute("""
+                SELECT symbol, strategy, gross_pnl, exit_reason
+                FROM trades
+                WHERE date = ?
+                ORDER BY ABS(gross_pnl) DESC
+                LIMIT ?
+            """, (d, n)).fetchall()
+        return [
+            {"symbol": r[0], "strategy": r[1],
+             "gross_pnl": r[2], "exit_reason": r[3]}
+            for r in rows
+        ]
