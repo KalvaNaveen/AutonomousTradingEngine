@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-18T01:12:48.713573",
+  "timestamp": "2026-03-18T02:08:45.250218",
   "version": "v12_Minervini",
   "passed": 21,
   "failed": 0,
@@ -15,7 +15,7 @@
     },
     "websocket_connected": {
       "status": "PASS",
-      "detail": "156/156 tokens have live LTP"
+      "detail": "498/498 tokens have live LTP"
     },
     "daily_cache_preloaded": {
       "status": "PASS",
@@ -27,11 +27,11 @@
     },
     "paper_broker_ltp_cache": {
       "status": "PASS",
-      "detail": "ABB: broker._ltp()=6310.5 == tick_store=6310.5 (cache hit confirmed)"
+      "detail": "AARTIIND: broker._ltp()=424.95 == tick_store=424.95 (cache hit confirmed)"
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_C88C801ACB"
+      "detail": "Order intercepted as virtual: PAPER_CC4CBA8784"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -63,7 +63,7 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 52"
+      "detail": "Write confirmed. Total trades: 58"
     },
     "fundamental_agent_scrape": {
       "status": "PASS",

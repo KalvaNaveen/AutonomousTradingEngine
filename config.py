@@ -94,7 +94,7 @@ S2_PARTIAL_TARGET_1     = 0.012
 S2_PARTIAL_TARGET_2     = 0.020
 S2_HARD_STOP_PCT        = 0.008
 S2_TIME_STOP_MINUTES    = 45
-S2_MIN_TURNOVER_CR      = 500
+S2_MIN_TURNOVER_CR      = 250
 
 # ── Strategy 3: SEPA + VCP Swing (CNC multi-week, Minervini) ────
 # Sourced strictly from: Trade Like a Stock Market Wizard (2013),
@@ -104,7 +104,7 @@ S3_MIN_SALES_GROWTH      = 20.0   # % quarterly YoY
 S3_MIN_ROE               = 17.0   # % annual
 S3_MAX_DEBT_EQUITY       = 0.5    # ratio (<50%)
 S3_MIN_RS_SCORE          = 70     # 1–99 custom RS rank (≥70 = top 30%)
-S3_MIN_TURNOVER_CR       = 200    # Cr daily avg — mid+large cap only
+S3_MIN_TURNOVER_CR       = 25     # Lowers the floor to catch quiet VCP bases in mid-caps
 S3_MAX_STOP_PCT          = 0.08   # 8% max stop (Minervini hard rule)
 S3_PARTIAL_EXIT_PCT      = 0.22   # 1/3 partial at +22% if < 3 weeks
 S3_TARGET_SWING_PCT      = 0.40   # Trail overrides; placeholder R:R
@@ -123,7 +123,7 @@ S4_MAX_BELOW_52W_HIGH    = 0.05   # Within 5% of 52-week high
 S4_MAX_STOP_PCT          = 0.08   # 8% max
 S4_PARTIAL_EXIT_PCT      = 0.20   # Partial at +20%
 S4_MAX_HOLD_DAYS         = 60     # 2-month max
-S4_MIN_TURNOVER_CR       = 500    # Higher bar for momentum breakouts
+S4_MIN_TURNOVER_CR       = 100    # Momentum breakouts need moderate liquidity
 S4_BREAKEVEN_MOVE_PCT    = 0.10   # Breakeven after +10%
 S4_STALL_WEEKS           = 3
 

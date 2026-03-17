@@ -11,20 +11,7 @@ from config import today_ist, INDIA_VIX_TOKEN
 class DataAgent:
     UNIVERSE: dict[int, str] = {}
 
-    INDEX_URLS = {
-        "NIFTY50": "https://niftyindices.com/IndexConstituent/ind_nifty50list.csv",
-        "NIFTYNEXT50": "https://niftyindices.com/IndexConstituent/ind_niftynext50list.csv",
-        "BANKNIFTY": "https://niftyindices.com/IndexConstituent/ind_niftybanklist.csv",
-        "IT": "https://niftyindices.com/IndexConstituent/ind_niftyitlist.csv",
-        "PHARMA": "https://niftyindices.com/IndexConstituent/ind_niftypharmalist.csv",
-        "AUTO": "https://niftyindices.com/IndexConstituent/ind_niftyautolist.csv",
-        "FINANCE": "https://niftyindices.com/IndexConstituent/ind_niftyfinancelist.csv",
-        "CONSUMER_DURABLES": "https://niftyindices.com/IndexConstituent/ind_niftyconsumerdurableslist.csv",
-        "FMCG": "https://niftyindices.com/IndexConstituent/ind_niftyfmcglist.csv"
-    }
-
     FALLBACK_SYMBOLS = [
-        # Crucial Nifty50/NiftyNext50 baseline if all APIs fail entirely
         "RELIANCE", "TCS", "HDFCBANK", "INFY", "HINDUNILVR", "ICICIBANK", "KOTAKBANK",
         "SBIN", "BHARTIARTL", "ITC", "AXISBANK", "LT", "WIPRO", "HCLTECH", "ASIANPAINT",
         "BAJFINANCE", "MARUTI", "SUNPHARMA", "TITAN", "NTPC", "TATAMOTORS"
@@ -37,25 +24,12 @@ class DataAgent:
         self.daily_cache = daily_cache  # DailyCache — pre-market REST batch
         self.load_universe()
 
-    def _fetch_index_csv(self, url: str) -> list:
-        try:
-            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            if r.status_code == 200:
-                df = pd.read_csv(io.StringIO(r.text))
-                if 'Symbol' in df.columns:
-                    return df['Symbol'].tolist()
-        except Exception as e:
-            print(f"[DataAgent] Fetch failed for {url}: {e}")
-        return []
-
     def load_universe(self, alert_fn=None):
         """
-        Loads NSE EQ instruments and filters to dynamically fetched active Nifty 
-        index constituents from niftyindices.com.
-        Set-deduplication ensures no duplicate tokens.
-        If fetch fails, falls back to static hardcoded lists.
-        One HTTP call at startup. Done.
+        Loads NSE EQ instruments and filters them dynamically exactly to the
+        Nifty 500 constituents extracted from a local CSV file ('nifty500.csv').
         """
+        import os
         try:
             instruments = self.kite.instruments("NSE")
             df          = pd.DataFrame(instruments)
@@ -63,17 +37,17 @@ class DataAgent:
                              (df['segment'] == 'NSE')]
             
             target_list = []
-            failed_fetches: int = 0
-            for label, url in self.INDEX_URLS.items():
-                symbols = self._fetch_index_csv(url)
-                if symbols:
-                    target_list.extend(symbols)
-                else:
-                    failed_fetches = int(failed_fetches + 1)  # type: ignore
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            csv_path = os.path.join(base_dir, "nifty500.csv")
             
-            if failed_fetches == len(self.INDEX_URLS):
-                print("[DataAgent] CRITICAL: ALL dynamic index fetches failed. Using fallback array.")
-                target_list = self.FALLBACK_SYMBOLS
+            if os.path.exists(csv_path):
+                nifty_df = pd.read_csv(csv_path)
+                if 'Symbol' in nifty_df.columns:
+                    target_list = nifty_df['Symbol'].tolist()
+                else:
+                    print(f"[DataAgent] CRITICAL: 'Symbol' column not found in {csv_path}")
+            else:
+                print(f"[DataAgent] CRITICAL: File {csv_path} not found.")
                 
             target = set(target_list)
             
@@ -85,7 +59,7 @@ class DataAgent:
             missing_list = sorted(list(missing))
             print(f"[DataAgent] Universe loaded: {loaded}/{expected} symbols "
                   f"(post-dedup unique tokens: {loaded})")
-            if loaded < expected * 0.95:
+            if expected > 0 and loaded < expected * 0.95:
                 msg = (f"⚠️ *UNIVERSE INCOMPLETE*\n"
                        f"`{loaded}/{expected}` symbols loaded.\n"
                        f"Missing: `{', '.join(missing_list[:10])}`\n"
