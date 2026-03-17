@@ -411,13 +411,23 @@ class ScannerAgent:
         """
         S4: Leadership Breakout (CNC momentum swing).
         Runs every ~60s during trading hours (intraday scan).
-        Requires: daily_cache (loaded), tick_store (live LTP).
+        [v15] Regime-adaptive thresholds: BEAR_PANIC=90, BULL=75
         """
         if not (self.data.daily_cache and self.data.daily_cache.is_loaded()):
             return []
         ts_ready = self.data.tick_store and self.data.tick_store.is_fresh()
         if not ts_ready:
             return []
+
+        # [v15] Regime-adaptive RS threshold
+        regime = self._mkt_status.detect_regime() if self._mkt_status else "NORMAL"
+        rs_threshold = {
+            "EXTREME_PANIC": 95,
+            "BEAR_PANIC": 90,      # Top 10% only in panic
+            "NORMAL": S4_MIN_RS_SCORE,  # 80
+            "BULL": 75,            # Top 25% in bull
+            "CHOP": 85
+        }.get(regime, S4_MIN_RS_SCORE)
 
         signals = []
 
@@ -426,54 +436,76 @@ class ScannerAgent:
             if self.data.get_avg_daily_turnover_cr(token) < S4_MIN_TURNOVER_CR:
                 continue
 
-            # ── RS score ≥ 80 (top 20%) ────────────────────────────────
+            # ── [v15] Regime-adaptive RS score ─────────────────────────
             rs = self.data.daily_cache.get_rs_score(token)
-            if rs < S4_MIN_RS_SCORE:
+            if rs < rs_threshold:
                 continue
 
-            # ── Near 52-week high ──────────────────────────────────────
+            # ── Near 52-week high (tighten in BEAR) ────────────────────
             high_52w = self.data.daily_cache.get_high_52w(token)
-            current  = self.data.tick_store.get_ltp_if_fresh(token)
+            current = self.data.tick_store.get_ltp_if_fresh(token)
             if current <= 0 or high_52w <= 0:
                 continue
-            if current < high_52w * (1 - S4_MAX_BELOW_52W_HIGH):
+            
+            max_below_52w = {
+                "BEAR_PANIC": 0.02,    # Within 2% (ultra-tight)
+                "NORMAL": S4_MAX_BELOW_52W_HIGH,  # 5%
+                "BULL": 0.07           # Within 7%
+            }.get(regime, S4_MAX_BELOW_52W_HIGH)
+            
+            if current < high_52w * (1 - max_below_52w):
                 continue
 
-            nifty_ltp  = self.data.tick_store.get_ltp_if_fresh(NIFTY50_TOKEN)
+            # ── [v13 FIXED] Relative Performance vs Nifty ──────────────
+            nifty_ltp = self.data.tick_store.get_ltp_if_fresh(NIFTY50_TOKEN)
             nifty_open = self.data.tick_store.get_day_open(NIFTY50_TOKEN)
             stock_open = self.data.tick_store.get_day_open(token)
             if nifty_ltp > 0 and nifty_open > 0 and stock_open > 0:
                 nifty_chg = (nifty_ltp - nifty_open) / nifty_open
                 stock_chg = (current - stock_open) / stock_open
-                if stock_chg <= nifty_chg:
+                if stock_chg <= nifty_chg * 1.1:  # [v15] 10% outperformance req
                     continue
 
-            # ── Volume confirmation: ≥150% of average ─────────────────
+            # ── Volume confirmation: regime-adaptive ──────────────────
             day_vol = self.data.tick_store.get_volume(token) or 0
             avg_vol = self.data.daily_cache.get_avg_daily_vol(token)
             if avg_vol <= 0:
                 continue
             rvol = day_vol / avg_vol
-            if rvol < S4_BREAKOUT_VOL_MIN:
+            
+            vol_threshold = {
+                "BEAR_PANIC": 2.0,     # 200% in panic
+                "NORMAL": S4_BREAKOUT_VOL_MIN,  # 1.5x
+                "BULL": 1.3            # 130% sufficient
+            }.get(regime, S4_BREAKOUT_VOL_MIN)
+            
+            if rvol < vol_threshold:
+                continue
+
+            # ── Sector relative strength (new filter) ─────────────────
+            sector_rs = self.data.daily_cache.get_sector_rs(symbol)
+            if sector_rs < 70:  # Weak sector protection
                 continue
 
             stop = round(current * (1 - S4_MAX_STOP_PCT), 2)
 
             signals.append({
-                "strategy":       "S4_LEADERSHIP",
-                "symbol":         symbol,
-                "token":          token,
-                "entry_price":    current,
-                "stop_price":     stop,
-                "target_price":   round(current * 1.40, 2),
+                "strategy": "S4_LEADERSHIP",
+                "symbol": symbol,
+                "token": token,
+                "entry_price": current * 1.005,  # 0.5% above LTP
+                "stop_price": stop,
+                "target_price": round(current * 1.40, 2),
                 "partial_target": round(current * (1 + S4_PARTIAL_EXIT_PCT), 2),
-                "rs_score":       rs,
-                "rvol":           round(rvol, 2),
-                "pct_from_52wh":  round((1 - current / high_52w) * 100, 2),
-                "product":        "CNC",
-                "max_hold_days":  S4_MAX_HOLD_DAYS,
-                "entry_time":     None,
-                "entry_date":     None,
+                "rs_score": rs,
+                "rvol": round(rvol, 2),
+                "pct_from_52wh": round((1 - current / high_52w) * 100, 2),
+                "regime": regime,
+                "sector_rs": sector_rs,
+                "product": "CNC",
+                "max_hold_days": S4_MAX_HOLD_DAYS,
+                "entry_time": None,
+                "entry_date": None,
             })
 
         return sorted(signals, key=lambda x: x["rs_score"], reverse=True)[:3]

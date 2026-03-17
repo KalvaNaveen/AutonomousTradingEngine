@@ -495,14 +495,16 @@ class ExecutionAgent:
             return
 
         now = now_ist()
+        trigger_px = round(signal["entry_price"], 1)          # The exact pivot crossing
+        limit_px   = round(signal["entry_price"] * 1.002, 1)  # Capped at 0.2% slippage
         try:
             if PAPER_MODE:
                 from paper_broker import PaperBroker
                 entry_oid = PaperBroker.instance().place_order(
                     symbol=sym, qty=qty, 
-                    price=round(entry * 1.002, 1),
-                    trigger_price=round(signal.get("pivot_price", entry), 1),
-                    order_type="SL", product="CNC",
+                    price=limit_px,
+                    trigger_price=trigger_px,
+                    order_type=self.kite.ORDER_TYPE_SL, product=self.kite.PRODUCT_CNC,
                     transaction_type="BUY"
                 )
             else:
@@ -512,10 +514,10 @@ class ExecutionAgent:
                     tradingsymbol=sym,
                     transaction_type=self.kite.TRANSACTION_TYPE_BUY,
                     quantity=qty,
-                    product="CNC",
+                    product=self.kite.PRODUCT_CNC,
                     order_type=self.kite.ORDER_TYPE_SL,
-                    price=round(entry * 1.002, 1),
-                    trigger_price=round(signal.get("pivot_price", entry), 1),
+                    price=limit_px,
+                    trigger_price=trigger_px,
                     validity=self.kite.VALIDITY_DAY
                 )
         except Exception as e:
@@ -558,24 +560,24 @@ class ExecutionAgent:
     def monitor_minervini_positions(self, daily_cache=None, tick_store=None):
         """
         Called every tick cycle. Manages all S3/S4 positions:
-          - Trail stop below 10d/21d SMA
-          - Move to breakeven at +12% (S3) / +10% (S4)
-          - 1/3 partial at +22% (S3) / +20% (S4) if move < 3 weeks
-          - Pyramid at +12% from entry on new pivot
-          - Stall exit: no progress for 3+ weeks
-          - Max-hold exit
+        - Trail stop below 10d/21d SMA
+        - Move to breakeven at +12% (S3) / +10% (S4)
+        - 1/3 partial at +22% (S3) / +20% (S4) if move < 3 weeks
+        - Pyramid at +12% from entry **ON NEW PIVOT** (FIXED)
+        - Stall exit: no new high 3+ weeks (FIXED)
+        - Max-hold exit
         """
         now = now_ist()
-
+        
         for oid, trade in list(self.active_trades.items()):
             strat = trade.get("strategy", "")
             if strat not in ("S3_SEPA_VCP", "S4_LEADERSHIP"):
                 continue
 
-            sym   = trade["symbol"]
+            sym = trade["symbol"]
             entry = trade["entry_price"]
-            stop  = trade.get("trail_stop", trade["stop_price"])
-            qty   = trade.get("remaining_qty", trade["qty"])
+            stop = trade.get("trail_stop", trade["stop_price"])
+            qty = trade.get("remaining_qty", trade["qty"])
             token = next((t for t, s in (getattr(self, '_data_universe', None) or {}).items() if s == sym), 0)
 
             # Get live price
@@ -603,12 +605,11 @@ class ExecutionAgent:
             if gain_pct >= be_pct and trade.get("trail_stop", 0) < entry:
                 trade["trail_stop"] = entry
                 self.state.save(oid, trade)
-                self.alert(f"🟢 *BREAKEVEN* `{sym}` stop → ₹`{entry:,.2f}`")
+                self.alert(f"🟢 *BREAKEVEN* `{sym}` stop → ₹{entry:,.2f}")
 
             # ── Partial at +22%/+20% if < 3 weeks ───────────────
             partial_pct = S4_PARTIAL_EXIT_PCT if strat == "S4_LEADERSHIP" else S3_PARTIAL_EXIT_PCT
-            if (gain_pct >= partial_pct and
-                    not trade.get("partial_filled", False)):
+            if (gain_pct >= partial_pct and not trade.get("partial_filled", False)):
                 entry_date = trade.get("entry_date")
                 if entry_date:
                     try:
@@ -633,46 +634,53 @@ class ExecutionAgent:
                                     order_type="LIMIT", price=ltp
                                 )
                             trade["partial_filled"] = True
-                            trade["remaining_qty"]  = qty - partial_qty
+                            trade["remaining_qty"] = qty - partial_qty
                             self.state.save(oid, trade)
                             self.alert(
-                                f"🟡 *PARTIAL EXIT* `{sym}` 1/3 @ ₹`{ltp:,.2f}` "
+                                f"🟡 *PARTIAL EXIT* `{sym}` 1/3 @ ₹{ltp:,.2f} "
                                 f"(+{gain_pct*100:.1f}% in {weeks:.1f}w)"
                             )
                         except Exception as e:
                             print(f"[ExecutionAgent] Partial exit error {sym}: {e}")
 
-            # ── Pyramid at +12% ─────────────────────────────────
-            if (gain_pct >= S3_PYRAMID_ADD_PCT and
-                    not trade.get("pyramid_added", False)):
-                add_qty = max(1, trade["qty"] // 2)
-                try:
-                    if PAPER_MODE:
-                        from paper_broker import PaperBroker
-                        PaperBroker.instance().place_order(
-                            symbol=sym, qty=add_qty, price=ltp,
-                            order_type="LIMIT", product="CNC",
-                            transaction_type="BUY"
-                        )
-                    else:
-                        self.kite.place_order(
-                            variety="regular", exchange="NSE",
-                            tradingsymbol=sym, transaction_type="BUY",
-                            quantity=add_qty, product="CNC",
-                            order_type="LIMIT", price=ltp
-                        )
-                    trade["pyramid_added"] = 1
-                    trade["qty"] += add_qty
-                    trade["remaining_qty"] += add_qty
-                    self.state.save(oid, trade)
-                    self.alert(
-                        f"🟣 *PYRAMID* `{sym}` +{add_qty} @ ₹`{ltp:,.2f}` "
-                        f"(+{gain_pct*100:.1f}%)"
-                    )
-                except Exception as e:
-                    print(f"[ExecutionAgent] Pyramid error {sym}: {e}")
+            # ── Pyramid at +12% ON NEW PIVOT (MINERVINI RULE) ──────── FIXED
+            if (gain_pct >= S3_PYRAMID_ADD_PCT and 
+                not trade.get("pyramid_added", False)):
+                # NEW: Check for new pivot high (Minervini rule)
+                highs_21d = daily_cache.get_highs(token)[-21:] if daily_cache else []
+                if len(highs_21d) >= 21:
+                    new_pivot = max(highs_21d[-10:])  # 10d new high
+                    entry_high = trade.get("entry_high", entry)
+                    if new_pivot > entry_high * 1.05:  # 5% new pivot
+                        add_qty = max(1, trade["qty"] // 2)
+                        try:
+                            if PAPER_MODE:
+                                from paper_broker import PaperBroker
+                                PaperBroker.instance().place_order(
+                                    symbol=sym, qty=add_qty, price=ltp,
+                                    order_type="LIMIT", product="CNC",
+                                    transaction_type="BUY"
+                                )
+                            else:
+                                self.kite.place_order(
+                                    variety="regular", exchange="NSE",
+                                    tradingsymbol=sym, transaction_type="BUY",
+                                    quantity=add_qty, product="CNC",
+                                    order_type="LIMIT", price=ltp
+                                )
+                            trade["pyramid_added"] = True
+                            trade["qty"] += add_qty
+                            trade["remaining_qty"] += add_qty
+                            trade["entry_high"] = new_pivot  # Track for next
+                            self.state.save(oid, trade)
+                            self.alert(
+                                f"🟣 *PYRAMID NEW PIVOT* `{sym}` +{add_qty} @ ₹{ltp:,.2f} "
+                                f"(new high ₹{new_pivot:,.2f}, +{gain_pct*100:.1f}%)"
+                            )
+                        except Exception as e:
+                            print(f"[ExecutionAgent] Pyramid error {sym}: {e}")
 
-            # ── Stall exit: no progress 3+ weeks ─────────────────
+            # ── Stall exit: NO NEW HIGH 3+ weeks (MINERVINI RULE) ───── FIXED
             entry_date = trade.get("entry_date")
             if entry_date:
                 try:
@@ -680,8 +688,15 @@ class ExecutionAgent:
                 except Exception:
                     weeks_held = 0
                 stall_weeks = S4_STALL_WEEKS if strat == "S4_LEADERSHIP" else S3_STALL_WEEKS
-                if weeks_held >= stall_weeks and gain_pct < 0.05:
-                    self._close_minervini(oid, trade, ltp, "STALL_EXIT")
+                
+                # FIXED: Track max high since entry vs current
+                highs_since_entry = daily_cache.get_highs(token)[-int(weeks_held*5):] if daily_cache else []
+                max_high_since = max(highs_since_entry) if highs_since_entry else ltp
+                stall_high_pct = (max_high_since - ltp) / entry if entry > 0 else 0
+                
+                if (weeks_held >= stall_weeks and 
+                    stall_high_pct < 0.05):  # <5% below max high = stalled
+                    self._close_minervini(oid, trade, ltp, "STALL_NO_NEW_HIGH")
                     continue
 
             # ── Max-hold exit ─────────────────────────────────
@@ -699,6 +714,7 @@ class ExecutionAgent:
             trail = trade.get("trail_stop", trade["stop_price"])
             if ltp <= trail:
                 self._close_minervini(oid, trade, ltp, "TRAIL_STOP")
+
 
     def _close_minervini(self, oid: str, trade: dict, ltp: float, reason: str):
         """Close a Minervini S3/S4 position."""
