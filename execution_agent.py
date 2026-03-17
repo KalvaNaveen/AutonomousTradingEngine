@@ -434,6 +434,11 @@ class ExecutionAgent:
 
         # Gate 8: RS score ≥ 70 (S3) or ≥ 80 (S4)
         rs = signal.get("rs_score", 0)
+        from config import S3_MIN_RS_RATING
+        if rs < S3_MIN_RS_RATING:
+            self.alert(f"❌ REJECTED S3: RS {rs:.0f} < 70")
+            return False, "RS_BELOW_70"
+        
         rs_min = S4_MIN_RS_SCORE if strat == "S4_LEADERSHIP" else S3_MIN_RS_SCORE
         if rs < rs_min:
             self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: RS {rs} < {rs_min}")
@@ -494,20 +499,24 @@ class ExecutionAgent:
             if PAPER_MODE:
                 from paper_broker import PaperBroker
                 entry_oid = PaperBroker.instance().place_order(
-                    symbol=sym, qty=qty, price=entry,
-                    order_type="LIMIT", product="CNC",
+                    symbol=sym, qty=qty, 
+                    price=round(entry * 1.002, 1),
+                    trigger_price=round(signal.get("pivot_price", entry), 1),
+                    order_type="SL", product="CNC",
                     transaction_type="BUY"
                 )
             else:
                 entry_oid = self.kite.place_order(
-                    variety="regular",
-                    exchange="NSE",
+                    variety=self.kite.VARIETY_REGULAR,
+                    exchange=self.kite.EXCHANGE_NSE,
                     tradingsymbol=sym,
-                    transaction_type="BUY",
+                    transaction_type=self.kite.TRANSACTION_TYPE_BUY,
                     quantity=qty,
                     product="CNC",
-                    order_type="LIMIT",
-                    price=entry,
+                    order_type=self.kite.ORDER_TYPE_SL,
+                    price=round(entry * 1.002, 1),
+                    trigger_price=round(signal.get("pivot_price", entry), 1),
+                    validity=self.kite.VALIDITY_DAY
                 )
         except Exception as e:
             self.alert(f"❌ *{strat} ORDER FAILED*\n`{sym}`: {e}")

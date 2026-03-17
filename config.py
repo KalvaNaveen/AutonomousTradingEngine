@@ -114,6 +114,7 @@ S3_VCP_MAX_CONTRACTIONS  = 6
 S3_BREAKEVEN_MOVE_PCT    = 0.12   # Move stop to breakeven after +12%
 S3_PYRAMID_ADD_PCT       = 0.12   # Pyramid trigger: +12% from entry
 S3_STALL_WEEKS           = 3      # No-progress exit: 3 weeks
+S3_MIN_RS_RATING         = 70
 
 # ── Strategy 4: Leadership Breakout (CNC momentum, Minervini) ────
 S4_MIN_RS_SCORE          = 80     # Top 20% performers

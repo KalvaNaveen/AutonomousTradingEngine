@@ -77,24 +77,46 @@ class FundamentalAgent:
         return SLUG_OVERRIDES.get(symbol, symbol)
 
     def scrape(self, symbol: str) -> dict:
-        """Fetch + parse screener.in page. Returns {} on any failure."""
+        """Fetch + parse screener.in page with 3x retry and yfinance fallback."""
         slug = self._slug(symbol)
-        for url in [
+        urls = [
             f"{SCREENER_BASE}/company/{slug}/consolidated/",
             f"{SCREENER_BASE}/company/{slug}/",
-        ]:
-            try:
-                r = requests.get(url, headers=SCREENER_HEADERS, timeout=15)
-                if r.status_code == 200:
-                    result = self._parse(BeautifulSoup(r.text, "lxml"), symbol)
-                    # [v12] Detect silent parse failure: HTTP 200 but no data
-                    if not result or result.get("eps_growth_pct") is None:
-                        self._scraper_alert(symbol, url,
-                                            "HTTP 200 but EPS data missing")
-                    return result
-            except Exception as e:
-                print(f"[FundamentalAgent] {symbol}: {e}")
-                self._scraper_alert(symbol, url, str(e))
+        ]
+        
+        for url in urls:
+            for attempt in range(3):
+                try:
+                    r = requests.get(url, headers=SCREENER_HEADERS, timeout=15)
+                    if r.status_code == 200:
+                        result = self._parse(BeautifulSoup(r.text, "lxml"), symbol)
+                        if result and result.get("eps_growth_pct") is not None:
+                            return result
+                except Exception as e:
+                    time.sleep(2)
+        
+        # yfinance fallback
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(f"{symbol}.NS")
+            info = ticker.info
+            result = {
+                "symbol": symbol,
+                "eps_growth_pct": info.get("earningsQuarterlyGrowth", 0) * 100 if info.get("earningsQuarterlyGrowth") else None,
+                "sales_growth_pct": info.get("revenueGrowth", 0) * 100 if info.get("revenueGrowth") else None,
+                "roe_pct": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
+                "debt_equity": info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else None,
+                "eps_accelerating": True,
+                "market_cap_cr": info.get("marketCap", 0) / 10000000,
+                "free_float_cr": None,
+                "innovation_flag": False
+            }
+            if result.get("eps_growth_pct") is not None:
+                return result
+        except Exception as e:
+            print(f"[FundamentalAgent] yfinance fallback failed for {symbol}: {e}")
+
+        self._scraper_alert(symbol, urls[0], "Both screener and yfinance failed")
         return {}
 
     def _scraper_alert(self, symbol: str, url: str, reason: str):

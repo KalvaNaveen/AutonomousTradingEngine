@@ -471,6 +471,11 @@ class BNFEngine:
                 f"Margin deployed: ₹`{s['capital_deployed']:,.0f}`"
             )
         self.execution.alert("🔴 *BNF ENGINE v12 — MARKET CLOSED*")
+        
+        self.execution.alert(f"⏰ *15:30 ROUTINE REMINDER*\n"
+                             f"Review journal today.\n"
+                             f"Loss streak: {self.risk.consecutive_losses}/3\n"
+                             f"Discipline check before tomorrow.")
 
     # ── Helper ────────────────────────────────────────────────────
 

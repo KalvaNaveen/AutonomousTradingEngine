@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-17T09:34:28.792255",
+  "timestamp": "2026-03-17T21:32:12.474860",
   "version": "v12_Minervini",
   "passed": 21,
   "failed": 0,
@@ -27,11 +27,11 @@
     },
     "paper_broker_ltp_cache": {
       "status": "PASS",
-      "detail": "ABB: broker._ltp()=6234.5 == tick_store=6234.5 (cache hit confirmed)"
+      "detail": "ABB: broker._ltp()=6310.5 == tick_store=6310.5 (cache hit confirmed)"
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_F3F919F293"
+      "detail": "Order intercepted as virtual: PAPER_45CDB94694"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -63,7 +63,7 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 46"
+      "detail": "Write confirmed. Total trades: 48"
     },
     "fundamental_agent_scrape": {
       "status": "PASS",
@@ -83,7 +83,7 @@
     },
     "master_checklist": {
       "status": "PASS",
-      "detail": "Correctly rejected: MARKET_CHOP"
+      "detail": "Correctly rejected: NOT_STAGE_2"
     },
     "backtest_minervini": {
       "status": "PASS",
@@ -95,9 +95,9 @@
     "filled": 2,
     "cancelled": 0,
     "open": 0,
-    "realised_pnl": 8388.0,
-    "available_margin": 506987.4,
-    "capital_deployed": -6987.4
+    "realised_pnl": 8453.5,
+    "available_margin": 507055.9,
+    "capital_deployed": -7055.9
   },
   "websocket": true,
   "daily_cache": true

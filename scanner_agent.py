@@ -439,6 +439,15 @@ class ScannerAgent:
             if current < high_52w * (1 - S4_MAX_BELOW_52W_HIGH):
                 continue
 
+            nifty_ltp  = self.data.tick_store.get_ltp_if_fresh(NIFTY50_TOKEN)
+            nifty_open = self.data.tick_store.get_day_open(NIFTY50_TOKEN)
+            stock_open = self.data.tick_store.get_day_open(token)
+            if nifty_ltp > 0 and nifty_open > 0 and stock_open > 0:
+                nifty_chg = (nifty_ltp - nifty_open) / nifty_open
+                stock_chg = (current - stock_open) / stock_open
+                if stock_chg <= nifty_chg:
+                    continue
+
             # ── Volume confirmation: ≥150% of average ─────────────────
             day_vol = self.data.tick_store.get_volume(token) or 0
             avg_vol = self.data.daily_cache.get_avg_daily_vol(token)
