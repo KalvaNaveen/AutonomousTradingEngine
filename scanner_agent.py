@@ -1,10 +1,12 @@
 """
-ScannerAgent v6 — all intraday data reads from tick_store and daily_cache.
+ScannerAgent v10 — all intraday data reads from tick_store and daily_cache.
 No REST calls during scan loops.
 
 detect_regime()         → tick_store (VIX LTP, AD ratio) + daily_cache (Nifty EMA)
 scan_s1_ema_divergence() → daily_cache (history/indicators) + tick_store (current price)
 scan_s2_overreaction()  → tick_store only (day_open, LTP, volume, depth, candles)
+[v10] scan_s3_sepa()     → daily_cache + fundamental_agent + stage_agent + vcp_agent
+[v10] scan_s4_leadership() → daily_cache + tick_store (RS + 52w high breakout)
 """
 
 import datetime
@@ -15,9 +17,16 @@ from config import *
 
 class ScannerAgent:
 
-    def __init__(self, data_agent: DataAgent, blackout_calendar):
-        self.data     = data_agent
-        self.blackout = blackout_calendar
+    def __init__(self, data_agent: DataAgent, blackout_calendar,
+                 fundamental_agent=None, stage_agent=None,
+                 vcp_agent=None, market_status_agent=None):
+        self.data       = data_agent
+        self.blackout   = blackout_calendar
+        # [v10] Minervini agents — optional, injected by main.py
+        self._fundamental = fundamental_agent
+        self._stage       = stage_agent
+        self._vcp         = vcp_agent
+        self._mkt_status  = market_status_agent
 
     def detect_regime(self) -> str:
         """
@@ -333,3 +342,129 @@ class ScannerAgent:
                    last["open"] < prev["close"] and
                    last["close"] > prev["open"])
         return hammer or engulf
+
+    # ── [v10] S3 SEPA + VCP Scan ──────────────────────────────────────────
+
+    def scan_s3_sepa(self) -> list:
+        """
+        S3: SEPA + VCP swing (CNC multi-week).
+        Runs once at ~9:00–9:30 AM pre-market.
+        Requires: daily_cache (loaded), fundamental_agent, stage_agent, vcp_agent.
+        """
+        if not (self._fundamental and self._stage and self._vcp):
+            return []
+        if not (self.data.daily_cache and self.data.daily_cache.is_loaded()):
+            return []
+
+        signals = []
+
+        for token, symbol in self.data.UNIVERSE.items():
+            # ── Turnover filter ─────────────────────────────────────────
+            if self.data.get_avg_daily_turnover_cr(token) < S3_MIN_TURNOVER_CR:
+                continue
+
+            # ── Stage 2 check ──────────────────────────────────────────
+            if not self._stage.is_stage_2(token):
+                continue
+
+            # ── Fundamentals (EPS/Sales/ROE/DE + EPS acceleration) ─────
+            passes_fund, reason = self._fundamental.passes_sepa_fundamentals(symbol)
+            if not passes_fund:
+                continue
+
+            # ── VCP detection ──────────────────────────────────────────
+            vcp = self._vcp.detect_vcp(token)
+            if not vcp:
+                continue
+
+            # ── RS score ───────────────────────────────────────────────
+            rs = self.data.daily_cache.get_rs_score(token)
+            if rs < S3_MIN_RS_SCORE:
+                continue
+
+            pivot = vcp["pivot_price"]
+            stop  = vcp["stop_price"]
+            stop_pct = (pivot - stop) / pivot if pivot > 0 else 1.0
+            if stop_pct > S3_MAX_STOP_PCT:
+                continue
+
+            signals.append({
+                "strategy":        "S3_SEPA_VCP",
+                "symbol":          symbol,
+                "token":           token,
+                "entry_price":     pivot,
+                "stop_price":      round(stop, 2),
+                "target_price":    round(pivot * (1 + S3_TARGET_SWING_PCT), 2),
+                "partial_target":  round(pivot * (1 + S3_PARTIAL_EXIT_PCT), 2),
+                "rs_score":        rs,
+                "vcp_contractions": vcp["n_contractions"],
+                "vcp_final_depth":  vcp["final_depth_pct"],
+                "product":         "CNC",
+                "max_hold_days":   S3_MAX_HOLD_DAYS,
+                "entry_time":      None,
+                "entry_date":      None,
+            })
+
+        return sorted(signals, key=lambda x: x["rs_score"], reverse=True)[:5]
+
+    def scan_s4_leadership(self) -> list:
+        """
+        S4: Leadership Breakout (CNC momentum swing).
+        Runs every ~60s during trading hours (intraday scan).
+        Requires: daily_cache (loaded), tick_store (live LTP).
+        """
+        if not (self.data.daily_cache and self.data.daily_cache.is_loaded()):
+            return []
+        ts_ready = self.data.tick_store and self.data.tick_store.is_fresh()
+        if not ts_ready:
+            return []
+
+        signals = []
+
+        for token, symbol in self.data.UNIVERSE.items():
+            # ── Turnover filter ─────────────────────────────────────────
+            if self.data.get_avg_daily_turnover_cr(token) < S4_MIN_TURNOVER_CR:
+                continue
+
+            # ── RS score ≥ 80 (top 20%) ────────────────────────────────
+            rs = self.data.daily_cache.get_rs_score(token)
+            if rs < S4_MIN_RS_SCORE:
+                continue
+
+            # ── Near 52-week high ──────────────────────────────────────
+            high_52w = self.data.daily_cache.get_high_52w(token)
+            current  = self.data.tick_store.get_ltp_if_fresh(token)
+            if current <= 0 or high_52w <= 0:
+                continue
+            if current < high_52w * (1 - S4_MAX_BELOW_52W_HIGH):
+                continue
+
+            # ── Volume confirmation: ≥150% of average ─────────────────
+            day_vol = self.data.tick_store.get_volume(token) or 0
+            avg_vol = self.data.daily_cache.get_avg_daily_vol(token)
+            if avg_vol <= 0:
+                continue
+            rvol = day_vol / avg_vol
+            if rvol < S4_BREAKOUT_VOL_MIN:
+                continue
+
+            stop = round(current * (1 - S4_MAX_STOP_PCT), 2)
+
+            signals.append({
+                "strategy":       "S4_LEADERSHIP",
+                "symbol":         symbol,
+                "token":          token,
+                "entry_price":    current,
+                "stop_price":     stop,
+                "target_price":   round(current * 1.40, 2),
+                "partial_target": round(current * (1 + S4_PARTIAL_EXIT_PCT), 2),
+                "rs_score":       rs,
+                "rvol":           round(rvol, 2),
+                "pct_from_52wh":  round((1 - current / high_52w) * 100, 2),
+                "product":        "CNC",
+                "max_hold_days":  S4_MAX_HOLD_DAYS,
+                "entry_time":     None,
+                "entry_date":     None,
+            })
+
+        return sorted(signals, key=lambda x: x["rs_score"], reverse=True)[:3]

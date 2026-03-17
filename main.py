@@ -1,13 +1,15 @@
 """
-BNF Engine v6 — 100% Autonomous + WebSocket Tick Engine
+BNF Engine v12 — 100% Autonomous + WebSocket Tick Engine + Minervini Dual Strategy
 Startup sequence:
   8:30 AM  → Auto token refresh (headless Zerodha login)
-  8:45 AM  → Blackout calendar refresh
-  9:00 AM  → Crash recovery + pre-market scan
+  8:45 AM  → Blackout calendar refresh + daily cache preload (260d)
+  9:00 AM  → Crash recovery + pre-market scan (S1 + S3)
   9:30 AM  → Trading begins
-  Every 60s → Tick: scan + execute + monitor
+  Every 60s → Tick: S1+S2+S4 scan + execute + monitor (Kotegawa + Minervini)
   Every 15m → Regime re-check
+  Every 30m → Market status re-check (MarketStatusAgent)
   Every Mon → Blackout calendar refresh
+  Sunday 06:00 → Fundamental data refresh (screener.in)
   15:30 PM  → Daily summary + journal
 """
 
@@ -30,6 +32,11 @@ from risk_agent import RiskAgent
 from journal import Journal
 from execution_agent import ExecutionAgent
 from kiteconnect import KiteTicker
+# [v10] Minervini agents
+from fundamental_agent import FundamentalAgent
+from stage_agent import StageAgent
+from vcp_agent import VCPAgent
+from market_status_agent import MarketStatusAgent
 from config import (
     KITE_API_KEY, TOTAL_CAPITAL, NIFTY50_TOKEN, INDIA_VIX_TOKEN,
     MAX_OPEN_POSITIONS, S1_MAX_HOLD_DAYS, S2_TIME_STOP_MINUTES,
@@ -60,6 +67,13 @@ class BNFEngine:
         self.data         = None
         self.scanner      = None
         self.execution    = None
+
+        # [v10] Minervini agents
+        self.fundamental_agent  = None
+        self.stage_agent        = None
+        self.vcp_agent          = None
+        self.market_status_agent = None
+        self.market_status      = "BULL"   # [v10] Minervini market timing
 
         self.regime     = "UNKNOWN"
         self.s1_signals = []
@@ -191,11 +205,29 @@ class BNFEngine:
             print(f"[BNFEngine] LIVE MODE — real orders, "
                   f"capital ₹{self.capital:,.0f}")
 
-        # 10 — Scanner and ExecutionAgent
-        self.scanner   = ScannerAgent(self.data, self.blackout)
+        # 10 — [v10] Minervini agents
+        self.fundamental_agent   = FundamentalAgent()
+        self.stage_agent         = StageAgent(self.daily_cache)
+        self.vcp_agent           = VCPAgent(self.daily_cache)
+        self.market_status_agent = MarketStatusAgent(
+            self.daily_cache, self.tick_store, NIFTY50_TOKEN
+        )
+
+        # 11 — Scanner and ExecutionAgent (with Minervini agents injected)
+        self.scanner = ScannerAgent(
+            self.data, self.blackout,
+            fundamental_agent=self.fundamental_agent,
+            stage_agent=self.stage_agent,
+            vcp_agent=self.vcp_agent,
+            market_status_agent=self.market_status_agent,
+        )
         self.execution = ExecutionAgent(
             self.kite, self.risk, self.journal, self.state
         )
+        # [v11] Inject agents into execution for master_checklist()
+        self.execution._stage_agent       = self.stage_agent
+        self.execution._fundamental_agent = self.fundamental_agent
+        self.execution._data_universe     = self.data.UNIVERSE
 
     # ── 8:30 AM: Auto token refresh ───────────────────────────────
 
@@ -278,6 +310,27 @@ class BNFEngine:
                 self.execution.alert("🔍 *S1 SCAN: 0 signals* — S2 only.")
         else:
             self.execution.alert("⏸ CHOP regime. S1 inactive.")
+
+        # [v10] S3 SEPA scan (pre-market, ~9:00 AM)
+        s3_signals = self.scanner.scan_s3_sepa()
+        if s3_signals:
+            lines = "\n".join([
+                f"• `{s['symbol']}` RS:{s['rs_score']} "
+                f"VCP:{s.get('vcp_contractions', '?')}"
+                for s in s3_signals[:5]
+            ])
+            self.execution.alert(
+                f"🎯 *S3 SEPA SCAN: {len(s3_signals)} signal"
+                f"{'s' if len(s3_signals) != 1 else ''}*\n{lines}"
+            )
+            # Store for execution at 9:30
+            self.state.set_kv("s3_signals", str(len(s3_signals)))
+            for sig in s3_signals[:2]:
+                if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
+                    self.execution.execute_minervini(sig)
+
+        # [v10] Initial market status
+        self._refresh_market_status()
 
         # Re-arm yesterday's hold orders at the exchange
         self.execution.rearm_s1_exits()
@@ -371,8 +424,26 @@ class BNFEngine:
                     self.execution.execute(sig, regime=self.regime)
                     break
 
-        # Monitor open positions
+        # [v10] S4: Live leadership breakout scan (every tick)
+        if datetime.time(9, 30) <= now_t <= datetime.time(15, 0):
+            s4_signals = self.scanner.scan_s4_leadership()
+            for sig in s4_signals:
+                if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
+                    self.execution.execute_minervini(sig)
+                    break   # One S4 entry per tick cycle
+
+        # [v10] Refresh market status every 30 minutes
+        if now_ist().minute % 30 == 0:
+            self._refresh_market_status()
+
+        # Monitor open positions (Kotegawa S1/S2)
         self.execution.monitor_positions()
+
+        # [v10] Monitor Minervini S3/S4 positions
+        self.execution.monitor_minervini_positions(
+            daily_cache=self.daily_cache,
+            tick_store=self.tick_store
+        )
 
     # ── 15:30 PM: End of day ─────────────────────────────────────
 
@@ -399,7 +470,7 @@ class BNFEngine:
                 f"Realised PnL: ₹`{s['realised_pnl']:+,.2f}`\n"
                 f"Margin deployed: ₹`{s['capital_deployed']:,.0f}`"
             )
-        self.execution.alert("🔴 *BNF ENGINE v9 — MARKET CLOSED*")
+        self.execution.alert("🔴 *BNF ENGINE v12 — MARKET CLOSED*")
 
     # ── Helper ────────────────────────────────────────────────────
 
@@ -471,7 +542,7 @@ class BNFEngine:
         from_date = (today - datetime.timedelta(days=6)).isoformat()
         to_date   = today.isoformat()
         msg = self._build_period_summary_msg(
-            "BNF ENGINE v9 — WEEKLY SUMMARY", from_date, to_date
+            "BNF ENGINE v12 — WEEKLY SUMMARY", from_date, to_date
         )
         self.execution.alert(msg)
         print(f"[Engine] Weekly summary sent: {from_date} → {to_date}")
@@ -491,15 +562,42 @@ class BNFEngine:
         from_date = last_month_start.isoformat()
         to_date   = last_month_end.isoformat()
         msg = self._build_period_summary_msg(
-            "BNF ENGINE v9 — MONTHLY SUMMARY", from_date, to_date
+            "BNF ENGINE v12 — MONTHLY SUMMARY", from_date, to_date
         )
         self.execution.alert(msg)
         print(f"[Engine] Monthly summary sent: {from_date} → {to_date}")
 
+    # [v10] Market status refresh
+    def _refresh_market_status(self):
+        """Called at pre-market and every 30 minutes."""
+        if not self.market_status_agent:
+            return
+        new_status = self.market_status_agent.detect()
+        if new_status != self.market_status:
+            old = self.market_status
+            self.market_status = new_status
+            self.state.set_kv("market_status", new_status)
+            if self.execution:
+                self.execution.alert(
+                    f"📊 *MARKET STATUS*: `{old}` → `{new_status}`"
+                )
+        else:
+            self.state.set_kv("market_status", new_status)
+
+    # [v10] Weekly fundamental refresh
+    def refresh_fundamentals(self):
+        """Called Sunday 06:00 AM. Fetches screener.in data for all symbols."""
+        if not self.fundamental_agent or not self.data:
+            return
+        alert_fn = self.execution.alert if self.execution else self._raw_alert
+        alert_fn("🔄 *FUNDAMENTAL REFRESH* starting...")
+        symbols = list(self.data.UNIVERSE.values())
+        self.fundamental_agent.preload(symbols, alert_fn=alert_fn)
+
     def run(self):
         from config import PAPER_MODE
         mode = "PAPER" if PAPER_MODE else "LIVE"
-        print(f"[BNF ENGINE v9] Starting. Mode: {mode}. "
+        print(f"[BNF ENGINE v12] Starting. Mode: {mode}. "
               f"Capital: ₹{self.capital:,.0f}")
 
         # Schedule all tasks
@@ -516,6 +614,8 @@ class BNFEngine:
         schedule.every().day.at("16:00").do(
             lambda: self.monthly_summary() if today_ist().day == 1 else None
         )
+        # [v10] Sunday 06:00 — weekly fundamental data refresh from screener.in
+        schedule.every().sunday.at("06:00").do(self.refresh_fundamentals)
 
         # If engine starts after 8:30 but before market open (recovery scenario)
         now = now_ist().time()

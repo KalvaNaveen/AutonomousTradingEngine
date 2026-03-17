@@ -55,6 +55,20 @@ class StateManager:
                     value TEXT NOT NULL
                 )
             """)
+            # [v10] Minervini columns migration — idempotent ALTER TABLE
+            for col, col_def in [
+                ("trail_stop",          "REAL DEFAULT 0"),
+                ("pyramid_added",       "INTEGER DEFAULT 0"),
+                ("rs_score",            "INTEGER DEFAULT 0"),
+                ("market_status",       "TEXT DEFAULT ''"),
+                ("weeks_no_progress",   "INTEGER DEFAULT 0"),
+            ]:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE active_positions ADD COLUMN {col} {col_def}"
+                    )
+                except Exception:
+                    pass  # Column already exists
             conn.commit()
 
     # ── Write ─────────────────────────────────────────────────────
@@ -73,7 +87,7 @@ class StateManager:
         with sqlite3.connect(STATE_DB) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO active_positions VALUES
-                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 entry_oid,
                 trade.get("symbol", ""),
@@ -96,7 +110,13 @@ class StateManager:
                 trade.get("rvol", 0),
                 trade.get("deviation_pct", 0),
                 "OPEN",
-                now
+                now,
+                # [v10] Minervini columns
+                trade.get("trail_stop", 0),
+                trade.get("pyramid_added", 0),
+                trade.get("rs_score", 0),
+                trade.get("market_status", ""),
+                trade.get("weeks_no_progress", 0),
             ))
             conn.commit()
 
@@ -173,7 +193,7 @@ class StateManager:
                 from config import today_ist
                 entry_date = today_ist()
 
-            trades.append({
+            trade = {
                 "entry_oid":      r["entry_oid"],
                 "symbol":         r["symbol"],
                 "strategy":       r["strategy"],
@@ -194,5 +214,15 @@ class StateManager:
                 "entry_date":     entry_date,
                 "rvol":           r["rvol"],
                 "deviation_pct":  r["deviation_pct"],
-            })
+            }
+            # [v10] Minervini columns — graceful for pre-migration rows
+            try:
+                trade["trail_stop"]        = r["trail_stop"] or 0
+                trade["pyramid_added"]     = r["pyramid_added"] or 0
+                trade["rs_score"]          = r["rs_score"] or 0
+                trade["market_status"]     = r["market_status"] or ""
+                trade["weeks_no_progress"] = r["weeks_no_progress"] or 0
+            except (IndexError, KeyError):
+                pass
+            trades.append(trade)
         return trades

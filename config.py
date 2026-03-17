@@ -96,6 +96,49 @@ S2_HARD_STOP_PCT        = 0.008
 S2_TIME_STOP_MINUTES    = 45
 S2_MIN_TURNOVER_CR      = 500
 
+# ── Strategy 3: SEPA + VCP Swing (CNC multi-week, Minervini) ────
+# Sourced strictly from: Trade Like a Stock Market Wizard (2013),
+# Think & Trade Like a Champion (2017), Mindset Secrets for Winning (2019).
+S3_MIN_EPS_GROWTH        = 25.0   # % quarterly YoY (prefer 40–100%)
+S3_MIN_SALES_GROWTH      = 20.0   # % quarterly YoY
+S3_MIN_ROE               = 17.0   # % annual
+S3_MAX_DEBT_EQUITY       = 0.5    # ratio (<50%)
+S3_MIN_RS_SCORE          = 70     # 1–99 custom RS rank (≥70 = top 30%)
+S3_MIN_TURNOVER_CR       = 200    # Cr daily avg — mid+large cap only
+S3_MAX_STOP_PCT          = 0.08   # 8% max stop (Minervini hard rule)
+S3_PARTIAL_EXIT_PCT      = 0.22   # 1/3 partial at +22% if < 3 weeks
+S3_TARGET_SWING_PCT      = 0.40   # Trail overrides; placeholder R:R
+S3_MAX_HOLD_DAYS         = 90     # 3-month swing max
+S3_VCP_MIN_CONTRACTIONS  = 2      # Minimum VCP pullback count
+S3_VCP_MAX_CONTRACTIONS  = 6
+S3_BREAKEVEN_MOVE_PCT    = 0.12   # Move stop to breakeven after +12%
+S3_PYRAMID_ADD_PCT       = 0.12   # Pyramid trigger: +12% from entry
+S3_STALL_WEEKS           = 3      # No-progress exit: 3 weeks
+
+# ── Strategy 4: Leadership Breakout (CNC momentum, Minervini) ────
+S4_MIN_RS_SCORE          = 80     # Top 20% performers
+S4_BREAKOUT_VOL_MIN      = 1.5    # ≥150% of average volume
+S4_MAX_BELOW_52W_HIGH    = 0.05   # Within 5% of 52-week high
+S4_MAX_STOP_PCT          = 0.08   # 8% max
+S4_PARTIAL_EXIT_PCT      = 0.20   # Partial at +20%
+S4_MAX_HOLD_DAYS         = 60     # 2-month max
+S4_MIN_TURNOVER_CR       = 500    # Higher bar for momentum breakouts
+S4_BREAKEVEN_MOVE_PCT    = 0.10   # Breakeven after +10%
+S4_STALL_WEEKS           = 3
+
+# ── Superperformance Stock Profile (Minervini PDF page 13) ──────────
+# NSE India mid-cap equivalent: ₹300 Cr – ₹5,000 Cr market cap.
+# "Small-mid cap, float 10-100M shares, innovation/new product." — Minervini
+S3_MIN_MARKET_CAP_CR    = 300.0    # ≥ ₹300 Cr — exclude micro caps
+S3_MAX_MARKET_CAP_CR    = 5000.0   # ≤ ₹5,000 Cr — avoid mega caps
+S3_MIN_FLOAT_CR         = 50.0     # Free float ≥ ₹50 Cr (liquidity floor)
+S3_INNOVATION_SALES_ACCEL = 80.0   # Sales growth ≥ 80% = innovation proxy
+
+# ── Market Status — Minervini market timing ───────────────────────
+NIFTY_DIST_DAYS_LIMIT    = 4      # Distribution days → reduce S3/S4
+NIFTY_FTD_MIN_PCT        = 1.25   # Follow-Through Day minimum move % [v12: 1.5→1.25, matches Minervini PDF p.10]
+NIFTY_FTD_MIN_DAY        = 4      # Earliest rally day for FTD signal
+
 # ── Timing ────────────────────────────────────────────────────
 HUNT_WINDOW_START       = "09:30"
 LAST_ENTRY_TIME         = "15:00"

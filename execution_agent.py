@@ -19,6 +19,9 @@ class ExecutionAgent:
         self.fill_monitor = FillMonitor(kite, state)
         self.active_trades = {}
         self.tg_base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        # [v10/v11] Minervini agents — injected later via _init_kite() in main.py
+        self._stage_agent       = None
+        self._fundamental_agent = None
 
     def restore_from_state(self):
         """
@@ -372,3 +375,353 @@ class ExecutionAgent:
                 )
             except Exception:
                 pass
+
+    # ── [v11] Master Checklist — 10 Minervini Hard Gates ────────────
+
+    def master_checklist(self, signal: dict) -> tuple:
+        """
+        [v11] All 10 Minervini gates. Returns (passes: bool, reason: str).
+        Called at top of execute_minervini() — blocks before approve_trade().
+        Each rejection sends a Telegram alert with specific reason.
+        """
+        sym  = signal.get("symbol", "")
+        strat = signal.get("strategy", "")
+
+        # Gate 1: Market Status must be BULL or BULL_WATCH
+        mkt = self.state.get_kv("market_status", "BULL")
+        if mkt in ("BEAR", "CHOP", "RALLY_ATTEMPT"):
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Market Status `{mkt}`")
+            return False, f"MARKET_{mkt}"
+
+        # Gate 2: Stage 2 confirmed
+        token = signal.get("token", 0)
+        if self._stage_agent and not self._stage_agent.is_stage_2(token):
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Not Stage 2")
+            return False, "NOT_STAGE_2"
+
+        # Gate 3: EPS growth ≥ 25%
+        fund = {}
+        if self._fundamental_agent:
+            fund = self._fundamental_agent.get(sym)
+        eps_g = fund.get("eps_growth_pct")
+        if eps_g is not None and eps_g < S3_MIN_EPS_GROWTH:
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: EPS {eps_g:.0f}% < {S3_MIN_EPS_GROWTH}%")
+            return False, f"EPS_{eps_g:.0f}%"
+
+        # Gate 4: EPS accelerating
+        if not fund.get("eps_accelerating", True):
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: EPS not accelerating")
+            return False, "EPS_NOT_ACCEL"
+
+        # Gate 5: Sales growth ≥ 20%
+        sal_g = fund.get("sales_growth_pct")
+        if sal_g is not None and sal_g < S3_MIN_SALES_GROWTH:
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Sales {sal_g:.0f}% < {S3_MIN_SALES_GROWTH}%")
+            return False, f"SALES_{sal_g:.0f}%"
+
+        # Gate 6: ROE > 17%
+        roe = fund.get("roe_pct")
+        if roe is not None and roe < S3_MIN_ROE:
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: ROE {roe:.0f}% < {S3_MIN_ROE}%")
+            return False, f"ROE_{roe:.0f}%"
+
+        # Gate 7: VCP ≥ 2 contractions (S3 only)
+        if strat == "S3_SEPA_VCP":
+            vcp_n = signal.get("vcp_contractions", 0)
+            if vcp_n < S3_VCP_MIN_CONTRACTIONS:
+                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: VCP {vcp_n} < {S3_VCP_MIN_CONTRACTIONS}")
+                return False, f"VCP_{vcp_n}"
+
+        # Gate 8: RS score ≥ 70 (S3) or ≥ 80 (S4)
+        rs = signal.get("rs_score", 0)
+        rs_min = S4_MIN_RS_SCORE if strat == "S4_LEADERSHIP" else S3_MIN_RS_SCORE
+        if rs < rs_min:
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: RS {rs} < {rs_min}")
+            return False, f"RS_{rs}"
+
+        # Gate 9: Stop ≤ 8%
+        entry = signal.get("entry_price", 0)
+        stop  = signal.get("stop_price", 0)
+        stop_pct = (entry - stop) / entry if entry > 0 else 1.0
+        max_stop = S4_MAX_STOP_PCT if strat == "S4_LEADERSHIP" else S3_MAX_STOP_PCT
+        if stop_pct > max_stop:
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Stop {stop_pct*100:.1f}% > {max_stop*100}%")
+            return False, f"STOP_{stop_pct*100:.1f}%"
+
+        # Gate 10: D/E < 0.5
+        de = fund.get("debt_equity")
+        if de is not None and de > S3_MAX_DEBT_EQUITY:
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: D/E {de:.2f} > {S3_MAX_DEBT_EQUITY}")
+            return False, f"DE_{de:.2f}"
+
+        # Gate 11 (bonus): CNC product
+        if signal.get("product") != "CNC":
+            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Product not CNC")
+            return False, "NOT_CNC"
+
+        return True, "ALL_GATES_PASS"
+
+    # ── [v10] Minervini Entry ───────────────────────────────────────
+
+    def execute_minervini(self, signal: dict):
+        """
+        S3/S4 entry handler. Trail mode after entry.
+        [v11] master_checklist() called first — blocks before approve_trade().
+        """
+        sym   = signal["symbol"]
+        strat = signal["strategy"]
+        entry = signal["entry_price"]
+        stop  = signal["stop_price"]
+        target = signal["target_price"]
+
+        # [v11] Master checklist — all 10 gates must pass
+        passes, reason = self.master_checklist(signal)
+        if not passes:
+            print(f"[ExecutionAgent] {sym} REJECTED by master_checklist: {reason}")
+            return
+
+        approved, appr_reason = self.risk.approve_trade(strat, entry, stop, sym)
+        if not approved:
+            self.alert(f"⚠️ *{strat} BLOCKED*\n`{sym}` — {appr_reason}")
+            return
+
+        qty = self.risk.calculate_qty(entry, stop)
+        if qty <= 0:
+            return
+
+        now = now_ist()
+        try:
+            if PAPER_MODE:
+                from paper_broker import PaperBroker
+                entry_oid = PaperBroker.instance().place_order(
+                    symbol=sym, qty=qty, price=entry,
+                    order_type="LIMIT", product="CNC",
+                    transaction_type="BUY"
+                )
+            else:
+                entry_oid = self.kite.place_order(
+                    variety="regular",
+                    exchange="NSE",
+                    tradingsymbol=sym,
+                    transaction_type="BUY",
+                    quantity=qty,
+                    product="CNC",
+                    order_type="LIMIT",
+                    price=entry,
+                )
+        except Exception as e:
+            self.alert(f"❌ *{strat} ORDER FAILED*\n`{sym}`: {e}")
+            return
+
+        trade = {
+            "symbol":         sym,
+            "strategy":       strat,
+            "product":        "CNC",
+            "regime":         self.state.get_kv("market_status", ""),
+            "entry_price":    entry,
+            "stop_price":     stop,
+            "partial_target": signal.get("partial_target", target),
+            "target_price":   target,
+            "qty":            qty,
+            "remaining_qty":  qty,
+            "entry_time":     now,
+            "entry_date":     now.date(),
+            # [v10] Minervini-specific fields
+            "trail_stop":       stop,
+            "pyramid_added":    0,
+            "rs_score":         signal.get("rs_score", 0),
+            "market_status":    self.state.get_kv("market_status", ""),
+            "weeks_no_progress": 0,
+        }
+        self.active_trades[entry_oid] = trade
+        self.state.save(entry_oid, trade)
+        self.risk.register_open(entry_oid, trade)
+
+        self.alert(
+            f"✅ *{strat} ENTRY*\n"
+            f"`{sym}` @ ₹`{entry:,.2f}`\n"
+            f"Qty: `{qty}` | Stop: ₹`{stop:,.2f}` | Target: ₹`{target:,.2f}`\n"
+            f"RS: `{signal.get('rs_score', 0)}` | Product: CNC"
+        )
+
+    # ── [v10] Minervini Position Monitor ──────────────────────────
+
+    def monitor_minervini_positions(self, daily_cache=None, tick_store=None):
+        """
+        Called every tick cycle. Manages all S3/S4 positions:
+          - Trail stop below 10d/21d SMA
+          - Move to breakeven at +12% (S3) / +10% (S4)
+          - 1/3 partial at +22% (S3) / +20% (S4) if move < 3 weeks
+          - Pyramid at +12% from entry on new pivot
+          - Stall exit: no progress for 3+ weeks
+          - Max-hold exit
+        """
+        now = now_ist()
+
+        for oid, trade in list(self.active_trades.items()):
+            strat = trade.get("strategy", "")
+            if strat not in ("S3_SEPA_VCP", "S4_LEADERSHIP"):
+                continue
+
+            sym   = trade["symbol"]
+            entry = trade["entry_price"]
+            stop  = trade.get("trail_stop", trade["stop_price"])
+            qty   = trade.get("remaining_qty", trade["qty"])
+            token = next((t for t, s in (getattr(self, '_data_universe', None) or {}).items() if s == sym), 0)
+
+            # Get live price
+            ltp = 0.0
+            if tick_store and tick_store.is_fresh():
+                ltp = tick_store.get_ltp_if_fresh(token) or 0.0
+            if ltp <= 0:
+                continue
+
+            gain_pct = (ltp - entry) / entry if entry > 0 else 0.0
+
+            # ── Trail stop: below 10d/21d SMA ───────────────────
+            if daily_cache and daily_cache.is_loaded():
+                closes = daily_cache.get_closes(token)
+                if len(closes) >= 21:
+                    sma10 = float(sum(closes[-10:]) / 10)
+                    sma21 = float(sum(closes[-21:]) / 21)
+                    new_trail = min(sma10, sma21) * 0.99
+                    if new_trail > stop:
+                        trade["trail_stop"] = round(new_trail, 2)
+                        self.state.save(oid, trade)
+
+            # ── Breakeven ─────────────────────────────────────
+            be_pct = S4_BREAKEVEN_MOVE_PCT if strat == "S4_LEADERSHIP" else S3_BREAKEVEN_MOVE_PCT
+            if gain_pct >= be_pct and trade.get("trail_stop", 0) < entry:
+                trade["trail_stop"] = entry
+                self.state.save(oid, trade)
+                self.alert(f"🟢 *BREAKEVEN* `{sym}` stop → ₹`{entry:,.2f}`")
+
+            # ── Partial at +22%/+20% if < 3 weeks ───────────────
+            partial_pct = S4_PARTIAL_EXIT_PCT if strat == "S4_LEADERSHIP" else S3_PARTIAL_EXIT_PCT
+            if (gain_pct >= partial_pct and
+                    not trade.get("partial_filled", False)):
+                entry_date = trade.get("entry_date")
+                if entry_date:
+                    try:
+                        weeks = (now.date() - entry_date).days / 7
+                    except Exception:
+                        weeks = 999
+                    if weeks < 3:
+                        partial_qty = max(1, qty // 3)
+                        try:
+                            if PAPER_MODE:
+                                from paper_broker import PaperBroker
+                                PaperBroker.instance().place_order(
+                                    symbol=sym, qty=partial_qty, price=ltp,
+                                    order_type="LIMIT", product="CNC",
+                                    transaction_type="SELL"
+                                )
+                            else:
+                                self.kite.place_order(
+                                    variety="regular", exchange="NSE",
+                                    tradingsymbol=sym, transaction_type="SELL",
+                                    quantity=partial_qty, product="CNC",
+                                    order_type="LIMIT", price=ltp
+                                )
+                            trade["partial_filled"] = True
+                            trade["remaining_qty"]  = qty - partial_qty
+                            self.state.save(oid, trade)
+                            self.alert(
+                                f"🟡 *PARTIAL EXIT* `{sym}` 1/3 @ ₹`{ltp:,.2f}` "
+                                f"(+{gain_pct*100:.1f}% in {weeks:.1f}w)"
+                            )
+                        except Exception as e:
+                            print(f"[ExecutionAgent] Partial exit error {sym}: {e}")
+
+            # ── Pyramid at +12% ─────────────────────────────────
+            if (gain_pct >= S3_PYRAMID_ADD_PCT and
+                    not trade.get("pyramid_added", False)):
+                add_qty = max(1, trade["qty"] // 2)
+                try:
+                    if PAPER_MODE:
+                        from paper_broker import PaperBroker
+                        PaperBroker.instance().place_order(
+                            symbol=sym, qty=add_qty, price=ltp,
+                            order_type="LIMIT", product="CNC",
+                            transaction_type="BUY"
+                        )
+                    else:
+                        self.kite.place_order(
+                            variety="regular", exchange="NSE",
+                            tradingsymbol=sym, transaction_type="BUY",
+                            quantity=add_qty, product="CNC",
+                            order_type="LIMIT", price=ltp
+                        )
+                    trade["pyramid_added"] = 1
+                    trade["qty"] += add_qty
+                    trade["remaining_qty"] += add_qty
+                    self.state.save(oid, trade)
+                    self.alert(
+                        f"🟣 *PYRAMID* `{sym}` +{add_qty} @ ₹`{ltp:,.2f}` "
+                        f"(+{gain_pct*100:.1f}%)"
+                    )
+                except Exception as e:
+                    print(f"[ExecutionAgent] Pyramid error {sym}: {e}")
+
+            # ── Stall exit: no progress 3+ weeks ─────────────────
+            entry_date = trade.get("entry_date")
+            if entry_date:
+                try:
+                    weeks_held = (now.date() - entry_date).days / 7
+                except Exception:
+                    weeks_held = 0
+                stall_weeks = S4_STALL_WEEKS if strat == "S4_LEADERSHIP" else S3_STALL_WEEKS
+                if weeks_held >= stall_weeks and gain_pct < 0.05:
+                    self._close_minervini(oid, trade, ltp, "STALL_EXIT")
+                    continue
+
+            # ── Max-hold exit ─────────────────────────────────
+            max_hold = S4_MAX_HOLD_DAYS if strat == "S4_LEADERSHIP" else S3_MAX_HOLD_DAYS
+            if entry_date:
+                try:
+                    days_held = (now.date() - entry_date).days
+                except Exception:
+                    days_held = 0
+                if days_held >= max_hold:
+                    self._close_minervini(oid, trade, ltp, "MAX_HOLD_EXIT")
+                    continue
+
+            # ── Trail stop hit ─────────────────────────────────
+            trail = trade.get("trail_stop", trade["stop_price"])
+            if ltp <= trail:
+                self._close_minervini(oid, trade, ltp, "TRAIL_STOP")
+
+    def _close_minervini(self, oid: str, trade: dict, ltp: float, reason: str):
+        """Close a Minervini S3/S4 position."""
+        sym = trade["symbol"]
+        qty = trade.get("remaining_qty", trade["qty"])
+        try:
+            if PAPER_MODE:
+                from paper_broker import PaperBroker
+                PaperBroker.instance().place_order(
+                    symbol=sym, qty=qty, price=ltp,
+                    order_type="LIMIT", product="CNC",
+                    transaction_type="SELL"
+                )
+            else:
+                self.kite.place_order(
+                    variety="regular", exchange="NSE",
+                    tradingsymbol=sym, transaction_type="SELL",
+                    quantity=qty, product="CNC",
+                    order_type="LIMIT", price=ltp
+                )
+        except Exception as e:
+            self.alert(f"❌ *{reason} SELL FAILED* `{sym}`: {e}")
+            return
+
+        pnl = (ltp - trade["entry_price"]) * qty
+        self.risk.close_position(oid, pnl)
+        self.state.close(oid)
+        self.journal.log_exit(oid, trade, ltp, reason)
+        self.active_trades.pop(oid, None)
+
+        self.alert(
+            f"🔴 *{reason}* `{sym}`\n"
+            f"Exit @ ₹`{ltp:,.2f}` | PnL: ₹`{pnl:+,.0f}`\n"
+            f"Strategy: `{trade['strategy']}`"
+        )

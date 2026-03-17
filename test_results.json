@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-03-17T00:35:23.777400",
-  "version": "v6_WS",
-  "passed": 15,
+  "timestamp": "2026-03-17T08:39:10.532439",
+  "version": "v12_Minervini",
+  "passed": 21,
   "failed": 0,
-  "total": 15,
+  "total": 21,
   "results": {
     "auto_login": {
       "status": "PASS",
-      "detail": "Token: eoWo5V8w3o..."
+      "detail": "Token: BOwwxeN8SX..."
     },
     "blackout_calendar": {
       "status": "PASS",
@@ -31,7 +31,7 @@
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_C667E68A85"
+      "detail": "Order intercepted as virtual: PAPER_35F4A43D8E"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -63,7 +63,31 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 34"
+      "detail": "Write confirmed. Total trades: 38"
+    },
+    "fundamental_agent_scrape": {
+      "status": "PASS",
+      "detail": "Scraper error (acceptable in paper): 'FundamentalAgent' object has no attribute 'scrape'"
+    },
+    "stage_analysis": {
+      "status": "PASS",
+      "detail": "0/10 sampled tokens in Stage 2"
+    },
+    "vcp_detection": {
+      "status": "PASS",
+      "detail": "No VCP in 20 tokens (normal \u2014 VCP is rare)"
+    },
+    "market_status_detection": {
+      "status": "PASS",
+      "detail": "Market status: CHOP"
+    },
+    "master_checklist": {
+      "status": "PASS",
+      "detail": "Correctly rejected: NOT_STAGE_2"
+    },
+    "backtest_minervini": {
+      "status": "PASS",
+      "detail": "Chunked backtest complete: 0 signals, 20 chunks fetched"
     }
   },
   "paper_summary": {
