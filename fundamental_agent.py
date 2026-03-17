@@ -116,6 +116,7 @@ class FundamentalAgent:
         except Exception as e:
             print(f"[FundamentalAgent] yfinance fallback failed for {symbol}: {e}")
 
+        time.sleep(1.5)  # Yahoo rate limit protection
         self._scraper_alert(symbol, urls[0], "Both screener and yfinance failed")
         return {}
 

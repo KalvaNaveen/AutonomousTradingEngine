@@ -878,91 +878,117 @@ class PaperAgent:
         except Exception as e:
             self._fail("backtest_minervini", str(e))
 
-
-def backtest_minervini(kite: 'KiteConnect', universe: dict,
-                       days_back: int = 365) -> dict:
-    """
-    [v12] Chunked backtest for Minervini S3/S4 strategy.
-    Fetches historical data in 90-day chunks to handle long backtest periods
-    without hitting Zerodha's per-request limit.
-    
-    Returns: {signals_found: int, chunks_fetched: int, elapsed_s: float}
-    """
-    import datetime as dt
-    import time as _time
-
-    CHUNK_DAYS = 90
-    today = datetime.date.today()
-    start = today - datetime.timedelta(days=days_back)
-    signals_found = 0
-    chunks_fetched = 0
-
-    t0 = _time.time()
-    tokens = list(universe.keys())[:10]  # subset for speed
-
-    for token in tokens:
-        all_candles = []
-        chunk_start = start
-        while chunk_start < today:
-            chunk_end = min(chunk_start + datetime.timedelta(days=CHUNK_DAYS), today)
-            try:
-                candles = kite.historical_data(
-                    token, chunk_start, chunk_end, "day"
-                )
-                all_candles.extend(candles)
-                chunks_fetched += 1
-            except Exception:
-                pass
-            chunk_start = chunk_end + datetime.timedelta(days=1)
-            _time.sleep(0.35)
-
-        # Simple signal check: price crossed above SMA200
-        if len(all_candles) >= 200:
-            closes = [c["close"] for c in all_candles]
-            for i in range(200, len(closes)):
-                sma200 = sum(closes[i-200:i]) / 200
-                if closes[i] > sma200 and closes[i-1] <= sma200:
-                    signals_found += 1
-            
-            # [Fix 4] Execute S4 Backtest trades
-            symbol = universe.get(token, str(token))
-            s4_trades = _simulate_s4_on_history(symbol, all_candles)
-            if s4_trades:
-                pass # can accumulate but for now it satisfies the checklist execution
-
-    elapsed = _time.time() - t0
-    print(f"  Backtest: {len(tokens)} tokens, {chunks_fetched} chunks, "
-          f"{signals_found} signals, {elapsed:.1f}s")
-    return {
-        "signals_found": signals_found,
-        "chunks_fetched": chunks_fetched,
-        "elapsed_s": round(elapsed, 1),
-    }
-
-def _simulate_s4_on_history(symbol: str, bars: list) -> list:
-    trades = []
-    closes = [b["close"] for b in bars]
-    lows   = [b["low"] for b in bars]
-    highs  = [b["high"] for b in bars]
-    volumes = [b["volume"] for b in bars]
-    for i in range(252, len(closes)):
-        high_52w = max(highs[i-252:i])
-        if closes[i] < high_52w * 0.95: continue
-        avg_vol = sum(volumes[max(0, i-20):i]) / 20 if i >= 20 else 1
-        if volumes[i] < avg_vol * 1.5: continue
+    def backtest_minervini(kite: 'KiteConnect', universe: dict,
+                        days_back: int = 730) -> dict:
+        """
+        [v14] Chunked backtest for Minervini S3/S4 strategy.
         
-        entry = closes[i] * 1.005
-        stop  = entry * 0.92
-        for j in range(i+1, len(closes)):
-            if lows[j] <= stop:
-                pnl = (stop - entry) / entry * 100
-                trades.append({"symbol": symbol, "pnl_pct": round(pnl, 2), "exit_reason": "S4_STOP"})
-                break
-            elif j == i + 5:
-                pnl = (closes[j] - entry) / entry * 100
-                trades.append({"symbol": symbol, "pnl_pct": round(pnl, 2), "exit_reason": "S4_TIME"})
-                break
-    return trades
+        DEFAULT: 730 days (~2 years) for FAST daily test in paper_agent.py.
+        Run manually with days_back=3650 (10 years) for full Minervini validation.
+        
+        Fetches historical data in 90-day chunks to handle long backtest periods
+        without hitting Zerodha's per-request limit.
+        """
+        import datetime as dt
+        import time as _time
+
+        CHUNK_DAYS = 90
+        today = datetime.date.today()
+        start = today - datetime.timedelta(days=days_back)
+        signals_found = 0
+        chunks_fetched = 0
+        total_s4_trades = 0
+
+        t0 = _time.time()
+        tokens = list(universe.keys())[:15]  # subset for speed in daily test
+
+        for token in tokens:
+            all_candles = []
+            chunk_start = start
+            while chunk_start < today:
+                chunk_end = min(chunk_start + datetime.timedelta(days=CHUNK_DAYS), today)
+                try:
+                    candles = kite.historical_data(
+                        token, chunk_start, chunk_end, "day"
+                    )
+                    all_candles.extend(candles)
+                    chunks_fetched += 1
+                except Exception:
+                    pass
+                chunk_start = chunk_end + datetime.timedelta(days=1)
+                _time.sleep(0.35)
+
+            if len(all_candles) >= 200:
+                # Simple S3 signal check (SMA200 crossover)
+                closes = [c["close"] for c in all_candles]
+                for i in range(200, len(closes)):
+                    sma200 = sum(closes[i-200:i]) / 200
+                    if closes[i] > sma200 and closes[i-1] <= sma200:
+                        signals_found += 1
+                
+                # [Fix 4] Full S4 Backtest with Minervini trail logic
+                symbol = universe.get(token, str(token))
+                s4_trades = _simulate_s4_on_history(symbol, all_candles)
+                total_s4_trades += len(s4_trades)
+
+        elapsed = _time.time() - t0
+        print(f"  Backtest: {len(tokens)} tokens, {chunks_fetched} chunks, "
+            f"{signals_found} S3 signals, {total_s4_trades} S4 trades, {elapsed:.1f}s")
+        return {
+            "signals_found": signals_found,
+            "s4_trades": total_s4_trades,
+            "chunks_fetched": chunks_fetched,
+            "elapsed_s": round(elapsed, 1),
+            "note": "Default 730 days for speed. Run with days_back=3650 for full 10yr Minervini validation."
+        }
+
+    def _simulate_s4_on_history(self, symbol: str, bars: list) -> list:
+        """S4 Leadership Breakout — full Minervini trail (10d/21d SMA)."""
+        trades = []
+        closes = [b["close"] for b in bars]
+        lows   = [b["low"] for b in bars]
+        highs  = [b["high"] for b in bars]
+        volumes = [b["volume"] for b in bars]
+
+        for i in range(252, len(closes)):
+            high_52w = max(highs[i-252:i])
+            if closes[i] < high_52w * 0.95: continue
+
+            avg_vol = sum(volumes[max(0, i-20):i]) / 20 if i >= 20 else 1
+            if volumes[i] < avg_vol * 1.5: continue
+
+            entry = closes[i] * 1.005
+            stop  = entry * 0.92
+            trail = stop
+            in_trade = True
+            j = i + 1
+
+            while j < len(closes) and in_trade:
+                # Trail 10d low
+                if j >= 10:
+                    ten_d_low = min(lows[j-9:j+1])
+                    trail = max(trail, ten_d_low * 0.99)
+
+                # Breakeven after +12%
+                if closes[j] >= entry * 1.12:
+                    trail = max(trail, entry)
+
+                # 21d low trail (Minervini tightening)
+                if j >= 21:
+                    twentyone_d_low = min(lows[j-20:j+1])
+                    trail = max(trail, twentyone_d_low * 0.99)
+
+                if lows[j] <= trail:
+                    pnl = (trail - entry) / entry * 100
+                    trades.append({"symbol": symbol, "pnl_pct": round(pnl, 2), "exit_reason": "S4_TRAIL"})
+                    in_trade = False
+                j += 1
+
+            if in_trade:  # max hold exit
+                pnl = (closes[-1] - entry) / entry * 100
+                trades.append({"symbol": symbol, "pnl_pct": round(pnl, 2), "exit_reason": "S4_MAX_HOLD"})
+
+        return trades
 
 if __name__ == "__main__":
     PaperAgent().run()
