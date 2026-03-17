@@ -768,18 +768,20 @@ class PaperAgent:
         try:
             sym = "RELIANCE"
             data = self.fundamental_agent.scrape(sym)
-            if data and ("eps_growth_pct" in data or "roe_pct" in data):
+            if data and (data.get("eps_growth_pct") is not None or data.get("roe_pct") is not None):
+                eps = data.get('eps_growth_pct')
+                roe = data.get('roe_pct')
+                eps_str = f"{eps:.1f}%" if eps is not None else "N/A"
+                roe_str = f"{roe:.1f}%" if roe is not None else "N/A"
                 self._pass("fundamental_agent_scrape",
-                           f"{sym}: EPS={data.get('eps_growth_pct'):.1f}% "
-                           f"ROE={data.get('roe_pct'):.1f}%")
+                           f"{sym}: EPS={eps_str} ROE={roe_str}")
             else:
                 # Scraper may fail on weekends/holidays — acceptable
                 self._pass("fundamental_agent_scrape",
                            f"{sym}: scrape returned {data} "
                            f"(may be empty outside market hours)")
         except Exception as e:
-            self._pass("fundamental_agent_scrape",
-                       f"Scraper error (acceptable in paper): {e}")
+            self._fail("fundamental_agent_scrape", str(e))
 
     # ── Test 17 [v10]: stage_analysis ─────────────────────────────────
 

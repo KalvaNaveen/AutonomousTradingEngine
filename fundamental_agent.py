@@ -76,7 +76,7 @@ class FundamentalAgent:
     def _slug(self, symbol: str) -> str:
         return SLUG_OVERRIDES.get(symbol, symbol)
 
-    def _fetch(self, symbol: str) -> dict:
+    def scrape(self, symbol: str) -> dict:
         """Fetch + parse screener.in page. Returns {} on any failure."""
         slug = self._slug(symbol)
         for url in [
@@ -294,7 +294,7 @@ class FundamentalAgent:
                 skipped += 1
                 continue
 
-            data = self._fetch(sym)
+            data = self.scrape(sym)
             if data:
                 self._save_db(sym, data)
                 with self._lock:

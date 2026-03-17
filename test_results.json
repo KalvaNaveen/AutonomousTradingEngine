@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-17T08:39:10.532439",
+  "timestamp": "2026-03-17T09:34:28.792255",
   "version": "v12_Minervini",
   "passed": 21,
   "failed": 0,
@@ -11,7 +11,7 @@
     },
     "blackout_calendar": {
       "status": "PASS",
-      "detail": "26 dates. Next: ['2026-03-21', '2026-03-26', '2026-03-31']"
+      "detail": "6 dates. Next: ['2026-04-01', '2026-06-03', '2026-08-05']"
     },
     "websocket_connected": {
       "status": "PASS",
@@ -27,11 +27,11 @@
     },
     "paper_broker_ltp_cache": {
       "status": "PASS",
-      "detail": "ABB: broker._ltp()=6218.0 == tick_store=6218.0 (cache hit confirmed)"
+      "detail": "ABB: broker._ltp()=6234.5 == tick_store=6234.5 (cache hit confirmed)"
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_35F4A43D8E"
+      "detail": "Order intercepted as virtual: PAPER_F3F919F293"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -63,11 +63,11 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 38"
+      "detail": "Write confirmed. Total trades: 46"
     },
     "fundamental_agent_scrape": {
       "status": "PASS",
-      "detail": "Scraper error (acceptable in paper): 'FundamentalAgent' object has no attribute 'scrape'"
+      "detail": "RELIANCE: EPS=1.6% ROE=N/A"
     },
     "stage_analysis": {
       "status": "PASS",
@@ -83,7 +83,7 @@
     },
     "master_checklist": {
       "status": "PASS",
-      "detail": "Correctly rejected: NOT_STAGE_2"
+      "detail": "Correctly rejected: MARKET_CHOP"
     },
     "backtest_minervini": {
       "status": "PASS",
@@ -95,9 +95,9 @@
     "filled": 2,
     "cancelled": 0,
     "open": 0,
-    "realised_pnl": 8406.0,
-    "available_margin": 507010.9,
-    "capital_deployed": -7010.9
+    "realised_pnl": 8388.0,
+    "available_margin": 506987.4,
+    "capital_deployed": -6987.4
   },
   "websocket": true,
   "daily_cache": true
