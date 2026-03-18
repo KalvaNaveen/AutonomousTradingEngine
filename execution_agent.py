@@ -349,7 +349,7 @@ class ExecutionAgent:
         scans_line = f"\n🔄 Scans run today: `{total_scans}`" if total_scans else ""
 
         self.alert(
-            f"📊 *BNF ENGINE v9 — DAILY SUMMARY*\n"
+            f"📊 *BNF ENGINE v12 — DAILY SUMMARY*\n"
             f"`{today_ist()}` | Regime: `{regime}`\n"
             f"Trades: `{stats['total']}` | "
             f"W:`{stats['wins']}` L:`{stats['losses']}` | "

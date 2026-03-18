@@ -325,9 +325,20 @@ class DailyCache:
 
     def _fetch_daily(self, token: int, days: int = 260) -> list:
         from_dt = today_ist() - datetime.timedelta(days=days)
-        return self.kite.historical_data(
-            token, from_dt, today_ist(), "day"
-        )
+        
+        # [Fix] 503 errors on Kite historical API - implement 3x retry with backoff
+        for attempt in range(3):
+            try:
+                return self.kite.historical_data(
+                    token, from_dt, today_ist(), "day"
+                )
+            except Exception as e:
+                # If it's a 503 or any other API fail, wait before retrying
+                if attempt < 2:
+                    time.sleep(1.0 * (attempt + 1))  # 1s, then 2s
+                else:
+                    raise e
+        return []
 
     @staticmethod
     def _ema(prices: list, period: int) -> list:
