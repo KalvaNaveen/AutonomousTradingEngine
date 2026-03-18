@@ -30,6 +30,14 @@ class Journal:
                 )
             """)
             conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trades_date
+                ON trades(date)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trades_strategy
+                ON trades(strategy, date)
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS daily_summary (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     date            TEXT UNIQUE, regime TEXT,
@@ -45,7 +53,7 @@ class Journal:
         now  = now_ist()
         et   = trade.get("entry_time") or now
         xt   = trade.get("exit_time") or now
-        hold = (xt - et).seconds / 60 if isinstance(et, datetime.datetime) else 0
+        hold = (xt - et).total_seconds() / 60 if isinstance(et, datetime.datetime) else 0
         with sqlite3.connect(JOURNAL_DB) as conn:
             conn.execute("""
                 INSERT INTO trades
@@ -69,6 +77,23 @@ class Journal:
                 trade.get("daily_pnl_after", 0)
             ))
             conn.commit()
+
+    def log_exit(self, oid: str, trade: dict, exit_price: float, reason: str):
+        """
+        Called by ExecutionAgent._close_minervini() for S3/S4 position exits.
+        Wraps log_trade() with the exit price and computed PnL.
+        """
+        qty = trade.get("remaining_qty", trade.get("qty", 0))
+        entry_price = trade.get("entry_price", 0)
+        pnl = (exit_price - entry_price) * qty
+        self.log_trade({
+            **trade,
+            "full_exit_price": exit_price,
+            "pnl": pnl,
+            "exit_reason": reason,
+            "exit_time": now_ist(),
+            "daily_pnl_after": 0,
+        })
 
     def log_daily_summary(self, stats: dict, regime: str,
                            stopped: bool, reason: str):

@@ -16,7 +16,7 @@ class ExecutionAgent:
         self.risk    = risk
         self.journal = journal
         self.state   = state
-        self.fill_monitor = FillMonitor(kite, state)
+        self.fill_monitor = FillMonitor(kite, state, alert_fn=self.alert)
         self.active_trades = {}
         self.tg_base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
         # [v10/v11] Minervini agents — injected later via _init_kite() in main.py
@@ -361,6 +361,39 @@ class ExecutionAgent:
             f"{regime_lines}"
         )
 
+    def heartbeat_alert(self, regime: str, scan_count: int,
+                        s1_signals: int, s2_signals: int,
+                        s3_signals: int, s4_signals: int,
+                        near_triggers: list = None):
+        """
+        Fires every 30 minutes at :00 and :30.
+        Confirms engine is alive, shows what's being watched.
+        Only call this when scan_count > 0 to avoid 8:45 AM noise.
+        """
+        now = now_ist()
+        watch_lines = ""
+        if near_triggers:
+            watch_lines = "\n*👀 Near-trigger:*\n" + "\n".join([
+                f"• `{w['symbol']}` {w['strategy']} "
+                f"RVOL:{w.get('rvol', 0):.1f}"
+                for w in near_triggers[:4]
+            ])
+
+        open_syms = [t["symbol"] for t in self.active_trades.values()]
+        open_line = ""
+        if open_syms:
+            open_line = f"\n*Open:* `{'`, `'.join(open_syms)}`"
+
+        self.alert(
+            f"💓 *ENGINE ALIVE — {now.strftime('%H:%M')} IST*\n"
+            f"Regime: `{regime}` | Scans: `{scan_count}`\n"
+            f"Signals today — "
+            f"S1:`{s1_signals}` S2:`{s2_signals}` "
+            f"S3:`{s3_signals}` S4:`{s4_signals}`"
+            f"{open_line}"
+            f"{watch_lines}"
+        )
+
     def alert(self, msg: str):
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
             print(f"[ALERT] {msg}")
@@ -458,6 +491,20 @@ class ExecutionAgent:
         if de is not None and de > S3_MAX_DEBT_EQUITY:
             self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: D/E {de:.2f} > {S3_MAX_DEBT_EQUITY}")
             return False, f"DE_{de:.2f}"
+
+        # Gate 10.5 (bonus): Superperformance profile
+        if self._fundamental_agent:
+            sp_ok, sp_summary = self._fundamental_agent.is_superperformance_profile(sym)
+            if not sp_ok:
+                # Non-blocking: log but don't reject — superperf is bonus gate
+                print(f"[Checklist] {sym} not superperf profile: {sp_summary}")
+                # Only block S4 on superperf failure — S4 requires leadership stocks
+                if strat == "S4_LEADERSHIP":
+                    self.alert(
+                        f"⚠️ *S4 SUPERPERF FAIL — {sym}*\n"
+                        f"`{sp_summary}`"
+                    )
+                    return False, f"S4_NOT_SUPERPERF"
 
         # Gate 11 (bonus): CNC product
         if signal.get("product") != "CNC":
@@ -692,10 +739,9 @@ class ExecutionAgent:
                 # FIXED: Track max high since entry vs current
                 highs_since_entry = daily_cache.get_highs(token)[-int(weeks_held*5):] if daily_cache else []
                 max_high_since = max(highs_since_entry) if highs_since_entry else ltp
-                stall_high_pct = (max_high_since - ltp) / entry if entry > 0 else 0
                 
-                if (weeks_held >= stall_weeks and 
-                    stall_high_pct < 0.05):  # <5% below max high = stalled
+                if (max_high_since > 0 and weeks_held >= stall_weeks and
+                        (ltp / max_high_since) < 0.97):
                     self._close_minervini(oid, trade, ltp, "STALL_NO_NEW_HIGH")
                     continue
 

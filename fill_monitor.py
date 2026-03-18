@@ -16,9 +16,10 @@ from config import FILL_POLL_INTERVAL_SEC, FILL_TIMEOUT_MINUTES, now_ist
 
 class FillMonitor:
 
-    def __init__(self, kite: KiteConnect, state: StateManager):
+    def __init__(self, kite: KiteConnect, state: StateManager, alert_fn=None):
         self.kite  = kite
         self.state = state
+        self._alert = alert_fn or (lambda msg: print(f"[FillMonitor] {msg}"))
 
     def get_order_status(self, order_id: str) -> dict:
         """
@@ -264,7 +265,11 @@ class FillMonitor:
                         quantity=remaining
                     )
                 except Exception as e:
-                    print(f"[FillMonitor] SL modify after partial fill failed: {e}")
+                    self._alert(
+                        f"⚠️ *SL MODIFY FAILED* `{trade.get('symbol', '?')}`\n"
+                        f"Remaining qty {remaining} not applied to SL-M.\n"
+                        f"Manual intervention may be needed.\n`{e}`"
+                    )
                     # Non-fatal: log it. _check_exit_filled will still catch
                     # the SL fill and clean up the trade correctly.
             return True

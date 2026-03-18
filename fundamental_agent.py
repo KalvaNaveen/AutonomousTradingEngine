@@ -59,6 +59,7 @@ class FundamentalAgent:
         self._lock   = threading.Lock()
         self._cache  = {}    # symbol → fundamentals dict
         self._loaded = False
+        self._scraper_alerted = set()
         self._init_db()
 
     def _init_db(self):
@@ -98,16 +99,25 @@ class FundamentalAgent:
         # yfinance fallback
         try:
             import yfinance as yf
+            import math
             ticker = yf.Ticker(f"{symbol}.NS")
             info = ticker.info
+            
+            def _safe_float(v):
+                if v is None: return 0.0
+                try: 
+                    f = float(v)
+                    return 0.0 if math.isnan(f) else f
+                except: return 0.0
+
             result = {
                 "symbol": symbol,
-                "eps_growth_pct": info.get("earningsQuarterlyGrowth", 0) * 100 if info.get("earningsQuarterlyGrowth") else None,
-                "sales_growth_pct": info.get("revenueGrowth", 0) * 100 if info.get("revenueGrowth") else None,
-                "roe_pct": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
-                "debt_equity": info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else None,
+                "eps_growth_pct": _safe_float(info.get("earningsQuarterlyGrowth")) * 100,
+                "sales_growth_pct": _safe_float(info.get("revenueGrowth")) * 100,
+                "roe_pct": _safe_float(info.get("returnOnEquity")) * 100,
+                "debt_equity": _safe_float(info.get("debtToEquity")) / 100,
                 "eps_accelerating": True,
-                "market_cap_cr": info.get("marketCap", 0) / 10000000,
+                "market_cap_cr": _safe_float(info.get("marketCap")) / 10000000,
                 "free_float_cr": None,
                 "innovation_flag": False
             }
@@ -127,11 +137,10 @@ class FundamentalAgent:
         Throttled: only one alert per symbol per session (avoids spam on
         batch preload failures). Session flag stored in _scraper_alerted set.
         """
-        if not hasattr(self, "_scraper_alerted"):
-            self._scraper_alerted = set()
-        if symbol in self._scraper_alerted:
-            return
-        self._scraper_alerted.add(symbol)
+        with self._lock:
+            if symbol in self._scraper_alerted:
+                return
+            self._scraper_alerted.add(symbol)
 
         msg = (
             f"🚨 *SCRAPER BROKEN: Check FundamentalAgent*\n"

@@ -78,16 +78,19 @@ class MarketStatusAgent:
     def _nifty_stage_2(self) -> bool:
         """Nifty Stage 2: simplified 4-criteria (no RS rank for index)."""
         if not self.dc or not self.dc.is_loaded():
-            return True   # Default to allowing trades if cache not ready
+            return False   # Block until cache is ready
         sma50   = self.dc.get_sma50(self.token)
         sma150  = self.dc.get_sma150(self.token)
         sma200  = self.dc.get_sma200(self.token)
         sma200u = self.dc.get_sma200_up(self.token)
 
         closes = self.dc.get_closes(self.token)
+        if len(closes) < 200:
+            return False
+
         price  = closes[-1] if closes else 0.0
         if price <= 0 or sma50 <= 0:
-            return True
+            return False
 
         return (price > sma50 > sma150 > sma200 and sma200u)
 

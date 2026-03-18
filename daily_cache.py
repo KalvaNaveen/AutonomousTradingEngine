@@ -313,8 +313,10 @@ class DailyCache:
             d = self._data.get(token, {})
         upper = d.get("upper_circuit", 0.0)
         lower = d.get("lower_circuit", 0.0)
-        if ltp <= 0 or (upper <= 0 and lower <= 0):
-            return False
+        if ltp <= 0:
+            return True   # No price data = treat as circuit-locked (block trade)
+        if upper <= 0 and lower <= 0:
+            return False  # No circuit limits configured = allow
         return (upper > 0 and ltp >= upper * 0.999) or \
                (lower > 0 and ltp <= lower * 1.001)
 

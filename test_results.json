@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-03-18T08:08:25.289694",
+  "timestamp": "2026-03-18T08:36:08.632277",
   "version": "v12_Minervini",
   "passed": 21,
   "failed": 0,
@@ -31,7 +31,7 @@
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_44495F3EAD"
+      "detail": "Order intercepted as virtual: PAPER_4486063F09"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -63,7 +63,7 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 64"
+      "detail": "Write confirmed. Total trades: 66"
     },
     "fundamental_agent_scrape": {
       "status": "PASS",

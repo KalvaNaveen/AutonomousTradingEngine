@@ -226,7 +226,7 @@ class DataAgent:
             lower = q.get("lower_circuit_limit", 0)
             ltp   = q.get("last_price", 0)
             if ltp <= 0:
-                return False
+                return True
             return (ltp >= upper * 0.999) or (ltp <= lower * 1.001)
         except Exception:
             return False
