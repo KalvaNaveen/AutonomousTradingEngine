@@ -64,10 +64,10 @@ NIFTY50_TOKEN       = 256265
 INDIA_VIX_TOKEN     = 264969
 
 # ── 4-Tier Regime Thresholds ──────────────────────────────────
-VIX_BEAR_PANIC      = 18.0
-VIX_NORMAL_HIGH     = 18.0
-VIX_NORMAL_LOW      = 15.0
-VIX_BULL_MAX        = 15.0
+VIX_BEAR_PANIC      = 22.0
+VIX_NORMAL_HIGH     = 22.0
+VIX_NORMAL_LOW      = 12.0
+VIX_BULL_MAX        = 18.0
 # Hard stop threshold — engine refuses all new entries above this.
 # At VIX 30+, market structure breaks down. Spreads widen, circuit breakers
 # trigger, intraday reversals become meaningless. No strategy edge exists.
@@ -76,20 +76,20 @@ VIX_EXTREME_STOP    = 30.0
 
 # ── Strategy 1: EMA Divergence (CNC swing) ───────────────────
 S1_EMA_PERIOD           = 25
-S1_DEVIATION_MIN        = 0.20
-S1_DEVIATION_NORMAL     = 0.25
-S1_DEVIATION_BULL       = 0.30
+S1_DEVIATION_MIN        = 0.12
+S1_DEVIATION_NORMAL     = 0.15
+S1_DEVIATION_BULL       = 0.20
 S1_DEVIATION_MAX        = 0.35
-S1_RSI_THRESHOLD        = 32
+S1_RSI_THRESHOLD        = 38
 S1_VOLUME_MULTIPLIER    = 1.5
 S1_HARD_STOP_PCT        = 0.07
 S1_MAX_HOLD_DAYS        = 3
 S1_MIN_TURNOVER_CR      = 100
 
 # ── Strategy 2: Overreaction Bounce (MIS intraday) ───────────
-S2_DROP_MIN             = 0.05
+S2_DROP_MIN             = 0.03
 S2_DROP_MAX             = 0.10
-S2_RVOL_MIN             = 2.5
+S2_RVOL_MIN             = 1.8
 S2_PARTIAL_TARGET_1     = 0.012
 S2_PARTIAL_TARGET_2     = 0.020
 S2_HARD_STOP_PCT        = 0.008

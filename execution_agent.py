@@ -361,38 +361,6 @@ class ExecutionAgent:
             f"{regime_lines}"
         )
 
-    def heartbeat_alert(self, regime: str, scan_count: int,
-                        s1_signals: int, s2_signals: int,
-                        s3_signals: int, s4_signals: int,
-                        near_triggers: list = None):
-        """
-        Fires every 30 minutes at :00 and :30.
-        Confirms engine is alive, shows what's being watched.
-        Only call this when scan_count > 0 to avoid 8:45 AM noise.
-        """
-        now = now_ist()
-        watch_lines = ""
-        if near_triggers:
-            watch_lines = "\n*👀 Near-trigger:*\n" + "\n".join([
-                f"• `{w['symbol']}` {w['strategy']} "
-                f"RVOL:{w.get('rvol', 0):.1f}"
-                for w in near_triggers[:4]
-            ])
-
-        open_syms = [t["symbol"] for t in self.active_trades.values()]
-        open_line = ""
-        if open_syms:
-            open_line = f"\n*Open:* `{'`, `'.join(open_syms)}`"
-
-        self.alert(
-            f"💓 *ENGINE ALIVE — {now.strftime('%H:%M')} IST*\n"
-            f"Regime: `{regime}` | Scans: `{scan_count}`\n"
-            f"Signals today — "
-            f"S1:`{s1_signals}` S2:`{s2_signals}` "
-            f"S3:`{s3_signals}` S4:`{s4_signals}`"
-            f"{open_line}"
-            f"{watch_lines}"
-        )
 
     def alert(self, msg: str):
         if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
@@ -500,10 +468,6 @@ class ExecutionAgent:
                 print(f"[Checklist] {sym} not superperf profile: {sp_summary}")
                 # Only block S4 on superperf failure — S4 requires leadership stocks
                 if strat == "S4_LEADERSHIP":
-                    self.alert(
-                        f"⚠️ *S4 SUPERPERF FAIL — {sym}*\n"
-                        f"`{sp_summary}`"
-                    )
                     return False, f"S4_NOT_SUPERPERF"
 
         # Gate 11 (bonus): CNC product

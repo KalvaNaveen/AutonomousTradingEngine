@@ -79,13 +79,6 @@ class BNFEngine:
         self.s1_signals = []
         self.token_ok   = False
         self.scan_count = 0   # [v9] total S1+S2 scan cycles run today
-        
-        self._s1_total = 0
-        self._s2_total = 0
-        self._s3_total = 0
-        self._s4_total = 0
-        self._near_triggers = []
-        self._last_heartbeat_minute = -1
         self._ws_was_fresh = True
 
     def _fetch_live_capital(self, real_kite: KiteConnect) -> float:
@@ -252,10 +245,7 @@ class BNFEngine:
     # ── 8:45 AM: Refresh blackout calendar + load daily cache ────
 
     def refresh_calendar(self):
-        if self.execution:
-            self.blackout.refresh(alert_fn=self.execution.alert)
-        else:
-            self.blackout.refresh()
+        self.blackout.refresh()
         print("[Engine] Blackout calendar refreshed")
 
         if self.blackout.is_blackout():
@@ -272,21 +262,18 @@ class BNFEngine:
     def preload_cache(self):
         """
         Called at 8:45 AM — after token refresh, before market open.
-        Fetches 75 days of daily OHLCV for all 100 universe symbols via REST.
+        Fetches 260 days of daily OHLCV for all universe symbols via REST.
         Also batch-fetches circuit limits via quote().
         After this: all scanner calls read from memory. Zero historical REST
         during trading hours.
-        ~35 seconds total. Must complete before pre_market() at 9:00 AM.
         """
         if not self.daily_cache or not self.data:
             print("[Engine] preload_cache: daily_cache not ready, skipping")
             return
-        alert_fn = self.execution.alert if self.execution else self._raw_alert
-        alert_fn("📦 *Loading daily cache...*\n~35 seconds. Stand by.")
-        ok = self.daily_cache.preload(self.data.UNIVERSE, alert_fn=alert_fn)
+        print("[Engine] Loading daily cache...")
+        ok = self.daily_cache.preload(self.data.UNIVERSE)
         if not ok:
-            alert_fn("⚠️ *Daily cache load failed or partial.*\n"
-                     "Engine will fall back to REST per symbol — scans will be slower.")
+            print("[Engine] Daily cache load failed or partial — REST fallback active")
 
     # ── 9:00 AM: Pre-market ───────────────────────────────────────
 
@@ -307,50 +294,26 @@ class BNFEngine:
         universe_count = len(self.data.UNIVERSE) if self.data else 0
         fund_loaded = self.fundamental_agent and self.fundamental_agent.is_loaded()
         self.execution.alert(
-            f"🔔 *MARKET OPEN — BNF ENGINE v12 ARMED*\n"
+            f"🔔 *BNF ENGINE v14 — ARMED*\n"
             f"Date: `{today_ist()}`\n"
             f"Regime: `{self.regime}`\n"
             f"Universe: `{universe_count}` symbols\n"
-            f"Daily cache: `{'✅ ready' if cache_ok else '⚠️ NOT loaded'}`\n"
-            f"Fundamentals: `{'✅ ready' if fund_loaded else '⚠️ stale/missing'}`\n"
-            f"WebSocket: `{'✅ live ticks' if ws_ok else '⚠️ REST fallback'}`\n"
-            f"All strategies armed. First scan in 30s.\n"
-            f"Heartbeat every 30 min."
+            f"Cache: `{'✅' if cache_ok else '⚠️'}`  "
+            f"WS: `{'✅' if ws_ok else '⚠️'}`  "
+            f"Fund: `{'✅' if fund_loaded else '⚠️'}`"
         )
 
         # Pre-scan S1 candidates
         if self.regime != "CHOP":
             self.s1_signals = self.scanner.scan_s1_ema_divergence(self.regime)
-            self._s1_total += len(self.s1_signals)
-            n = len(self.s1_signals)
-            if self.s1_signals:
-                lines = "\n".join([
-                    f"• `{s['symbol']}` Dev:{s['deviation_pct']}% "
-                    f"RSI:{s['rsi']} RVOL:{s['rvol']}"
-                    for s in self.s1_signals[:5]
-                ])
-                self.execution.alert(
-                    f"🔍 *S1 SCAN: {n} signal{'s' if n != 1 else ''} found*\n"
-                    f"{lines}"
-                )
-            else:
-                self.execution.alert("🔍 *S1 SCAN: 0 signals* — S2 only.")
+            print(f"[Engine] S1 scan: {len(self.s1_signals)} signals")
         else:
-            self.execution.alert("⏸ CHOP regime. S1 inactive.")
+            print("[Engine] CHOP regime — S1 inactive")
 
         # [v10] S3 SEPA scan (pre-market, ~9:00 AM)
         s3_signals = self.scanner.scan_s3_sepa()
-        self._s3_total += len(s3_signals)
+        print(f"[Engine] S3 SEPA scan: {len(s3_signals)} signals")
         if s3_signals:
-            lines = "\n".join([
-                f"• `{s['symbol']}` RS:{s['rs_score']} "
-                f"VCP:{s.get('vcp_contractions', '?')}"
-                for s in s3_signals[:5]
-            ])
-            self.execution.alert(
-                f"🎯 *S3 SEPA SCAN: {len(s3_signals)} signal"
-                f"{'s' if len(s3_signals) != 1 else ''}*\n{lines}"
-            )
             # Store for execution at 9:30
             self.state.set_kv("s3_signals", str(len(s3_signals)))
             for sig in s3_signals[:2]:
@@ -386,18 +349,10 @@ class BNFEngine:
 
         can_trade, reason = self.scanner.is_valid_trading_time()
         if not can_trade:
-            # For EXTREME_PANIC specifically: alert once per regime change,
-            # then continue to monitor_positions() so open trades are still
-            # managed. All other non-trade reasons skip everything.
             if reason.startswith("EXTREME_PANIC") and self.regime != "EXTREME_PANIC":
                 self.regime = "EXTREME_PANIC"
                 self.s1_signals = []
-                self.execution.alert(
-                    f"🚨 *EXTREME PANIC — TRADING HALTED*\n"
-                    f"VIX: `{reason.split('_')[-1]}`\n"
-                    f"No new entries. Open positions monitored normally.\n"
-                    f"Engine resumes when VIX drops below `{VIX_EXTREME_STOP}`."
-                )
+                print(f"[Engine] EXTREME PANIC — trading halted. VIX: {reason.split('_')[-1]}")
             self.execution.monitor_positions()
             return
 
@@ -407,25 +362,7 @@ class BNFEngine:
         if now_ist().minute % 15 == 0:
             new_regime = self.scanner.detect_regime()
             if new_regime != self.regime:
-                prev_regime = self.regime
-                emoji_map = {
-                    "BULL": "🟢", "BULL_WATCH": "🟡",
-                    "RALLY_ATTEMPT": "🟠", "BEAR": "🔴", "CHOP": "⚫",
-                    "EXTREME_PANIC": "🚨"
-                }
-                action_map = {
-                    "BULL": "All 4 strategies active at full size.",
-                    "BULL_WATCH": "S1/S2 normal. S3 at 50% size. S4 paused.",
-                    "RALLY_ATTEMPT": "S1/S2 only. No new S3/S4 entries.",
-                    "BEAR": "S2 scalp only. S1/S3/S4 all blocked.",
-                    "CHOP": "Reduced S2 only. All others blocked.",
-                    "EXTREME_PANIC": "TRADING HALTED."
-                }
-                self.execution.alert(
-                    f"{emoji_map.get(new_regime, '⚪')} *REGIME CHANGE*\n"
-                    f"`{self.regime}` → `{new_regime}`\n"
-                    f"{action_map.get(new_regime, '')}"
-                )
+                print(f"[Engine] Regime: {self.regime} → {new_regime}")
                 self.regime = new_regime
                 if self.regime == "EXTREME_PANIC":
                     self.s1_signals = []
@@ -433,13 +370,6 @@ class BNFEngine:
                     self.s1_signals = self.scanner.scan_s1_ema_divergence(
                         self.regime
                     )
-                    # Notify only when specifically recovering from EXTREME_PANIC
-                    if prev_regime == "EXTREME_PANIC":
-                        self.execution.alert(
-                            f"✅ *EXTREME PANIC CLEARED*\n"
-                            f"VIX back below `{VIX_EXTREME_STOP}` — "
-                            f"trading resumed. New regime: `{self.regime}`."
-                        )
             # Save regime to state
             self.state.set_kv("last_regime", self.regime)
             # Refresh circuit breaker limits — infrequent REST, 1 batch call
@@ -457,19 +387,6 @@ class BNFEngine:
         # S2: Live scan
         s2_signals = self.scanner.scan_s2_overreaction()
         self.scan_count += 1   # [v9] count every S2 scan cycle
-        self._s2_total += len(s2_signals)
-
-        # [v9] Alert on every S2 scan that produces signals
-        if s2_signals:
-            lines = "\n".join([
-                f"• `{s['symbol']}` RVOL:{s['rvol']:.1f}x "
-                f"Drop:{s['drop_pct']:.1f}%"
-                for s in s2_signals[:3]
-            ])
-            self.execution.alert(
-                f"⚡ *S2 SCAN: {len(s2_signals)} signal"
-                f"{'s' if len(s2_signals) != 1 else ''}*\n{lines}"
-            )
 
         for sig in s2_signals:
             if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
@@ -484,7 +401,6 @@ class BNFEngine:
         # [v10] S4: Live leadership breakout scan (every tick)
         if datetime.time(9, 30) <= now_t <= datetime.time(15, 0):
             s4_signals = self.scanner.scan_s4_leadership()
-            self._s4_total += len(s4_signals)
             for sig in s4_signals:
                 if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
                     self.execution.execute_minervini(sig)
@@ -493,18 +409,6 @@ class BNFEngine:
         # [v10] Refresh market status every 30 minutes
         if now_ist().minute % 30 == 0:
             self._refresh_market_status()
-
-            if now_ist().minute != self._last_heartbeat_minute:
-                self._last_heartbeat_minute = now_ist().minute
-                self.execution.heartbeat_alert(
-                    regime=self.regime,
-                    scan_count=self.scan_count,
-                    s1_signals=self._s1_total,
-                    s2_signals=self._s2_total,
-                    s3_signals=self._s3_total,
-                    s4_signals=self._s4_total,
-                    near_triggers=self._near_triggers
-                )
 
         # Monitor open positions (Kotegawa S1/S2)
         self.execution.monitor_positions()
@@ -523,16 +427,7 @@ class BNFEngine:
         self.execution.daily_summary_alert(self.regime,
                                             total_scans=self.scan_count)
         self.scan_count = 0   # [v9] reset daily counter
-        self._s1_total = self._s2_total = self._s3_total = self._s4_total = 0
 
-        # Tomorrow's watchlist
-        tmr = self.scanner.scan_s1_ema_divergence(self.regime)
-        if tmr:
-            lines = "\n".join([
-                f"• `{s['symbol']}` Dev:{s['deviation_pct']}%"
-                for s in tmr[:5]
-            ])
-            self.execution.alert(f"🌙 *TOMORROW S1 WATCHLIST*\n{lines}")
         if PAPER_MODE and hasattr(self.kite, "get_paper_summary"):
             s = self.kite.get_paper_summary()
             self.execution.alert(
@@ -541,14 +436,7 @@ class BNFEngine:
                 f"Realised PnL: ₹`{s['realised_pnl']:+,.2f}`\n"
                 f"Margin deployed: ₹`{s['capital_deployed']:,.0f}`"
             )
-        self.execution.alert("🔴 *BNF ENGINE v12 — MARKET CLOSED*")
-        
-        self.execution.alert(f"⏰ *15:30 ROUTINE REMINDER*\n"
-                     f"Review journal today.\n"
-                     f"Loss streak: {self.risk.consecutive_losses}/3\n"
-                     f"Check VIX & distribution days.\n"
-                     f"Write 3 lessons from today’s journal.\n"
-                     f"Discipline check before tomorrow.")
+        self.execution.alert("🔴 *BNF ENGINE v14 — MARKET CLOSED*")
 
     # ── Helper ────────────────────────────────────────────────────
 
@@ -652,25 +540,18 @@ class BNFEngine:
             return
         new_status = self.market_status_agent.detect()
         if new_status != self.market_status:
-            old = self.market_status
+            print(f"[Engine] Market status: {self.market_status} → {new_status}")
             self.market_status = new_status
-            self.state.set_kv("market_status", new_status)
-            if self.execution:
-                self.execution.alert(
-                    f"📊 *MARKET STATUS*: `{old}` → `{new_status}`"
-                )
-        else:
-            self.state.set_kv("market_status", new_status)
+        self.state.set_kv("market_status", new_status)
 
     # [v10] Weekly fundamental refresh
     def refresh_fundamentals(self):
         """Called Sunday 06:00 AM. Fetches screener.in data for all symbols."""
         if not self.fundamental_agent or not self.data:
             return
-        alert_fn = self.execution.alert if self.execution else self._raw_alert
-        alert_fn("🔄 *FUNDAMENTAL REFRESH* starting...")
+        print("[Engine] Fundamental refresh starting...")
         symbols = list(self.data.UNIVERSE.values())
-        self.fundamental_agent.preload(symbols, alert_fn=alert_fn)
+        self.fundamental_agent.preload(symbols)
 
     def run(self):
         from config import PAPER_MODE

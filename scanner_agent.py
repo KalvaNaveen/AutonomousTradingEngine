@@ -75,8 +75,8 @@ class ScannerAgent:
             "BEAR_PANIC": S1_DEVIATION_MIN,
             "NORMAL":     S1_DEVIATION_NORMAL,
             "BULL":       S1_DEVIATION_BULL,
-            "CHOP":       1.0,
-        }.get(regime, 1.0)
+            "CHOP":       S1_DEVIATION_MAX,   # Strictest — only deep deviations
+        }.get(regime, S1_DEVIATION_MAX)
 
     def is_valid_trading_time(self) -> tuple:
         now = now_ist()
@@ -106,8 +106,6 @@ class ScannerAgent:
         Kite quote() accepts up to 500 symbols. 100 calls would hit the
         10 req/sec rate limit and crash the scanner.
         """
-        if regime == "CHOP":
-            return []
         min_dev = self.get_s1_min_deviation(regime)
         signals = []
         ts_ready    = (self.data.tick_store and
