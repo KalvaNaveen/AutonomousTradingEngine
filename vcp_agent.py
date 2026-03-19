@@ -143,7 +143,7 @@ class VCPAgent:
         for h_idx, h_price in highs:
             # Volume pre-filter: reject distribution phase
             vol_pre_window = volumes[max(0, h_idx-10):h_idx]
-            recent_avg_vol = np.mean(volumes[-50:-10]) if len(volumes) > 50 else 1.0
+            recent_avg_vol = np.mean(volumes[max(0, h_idx-60):max(1, h_idx-10)]) if h_idx > 10 else 1.0
             if len(vol_pre_window) > 0 and np.mean(vol_pre_window) > recent_avg_vol * 1.2:
                 continue  # Distribution, not accumulation
             

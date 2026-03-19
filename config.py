@@ -64,7 +64,7 @@ NIFTY50_TOKEN       = 256265
 INDIA_VIX_TOKEN     = 264969
 
 # ── 4-Tier Regime Thresholds ──────────────────────────────────
-VIX_BEAR_PANIC      = 22.0
+VIX_BEAR_PANIC      = 22.5
 VIX_NORMAL_HIGH     = 22.0
 VIX_NORMAL_LOW      = 12.0
 VIX_BULL_MAX        = 18.0
@@ -114,7 +114,6 @@ S3_VCP_MAX_CONTRACTIONS  = 6
 S3_BREAKEVEN_MOVE_PCT    = 0.12   # Move stop to breakeven after +12%
 S3_PYRAMID_ADD_PCT       = 0.12   # Pyramid trigger: +12% from entry
 S3_STALL_WEEKS           = 3      # No-progress exit: 3 weeks
-S3_MIN_RS_RATING         = 70
 
 # ── Strategy 4: Leadership Breakout (CNC momentum, Minervini) ────
 S4_MIN_RS_SCORE          = 80     # Top 20% performers
@@ -126,6 +125,7 @@ S4_MAX_HOLD_DAYS         = 60     # 2-month max
 S4_MIN_TURNOVER_CR       = 100    # Momentum breakouts need moderate liquidity
 S4_BREAKEVEN_MOVE_PCT    = 0.10   # Breakeven after +10%
 S4_STALL_WEEKS           = 3
+S4_TARGET_SWING_PCT      = 0.40   # 40% swing target for S4 leadership breakouts
 
 # ── Superperformance Stock Profile (Minervini PDF page 13) ──────────
 # NSE India mid-cap equivalent: ₹300 Cr – ₹5,000 Cr market cap.
@@ -147,7 +147,7 @@ INTRADAY_SQUAREOFF      = "15:15"
 
 # ── Fill monitor polling ──────────────────────────────────────
 FILL_POLL_INTERVAL_SEC  = 30
-FILL_TIMEOUT_MINUTES    = 5
+FILL_TIMEOUT_MINUTES    = 30
 
 # ── Paths ─────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))

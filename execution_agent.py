@@ -435,10 +435,6 @@ class ExecutionAgent:
 
         # Gate 8: RS score ≥ 70 (S3) or ≥ 80 (S4)
         rs = signal.get("rs_score", 0)
-        from config import S3_MIN_RS_RATING
-        if rs < S3_MIN_RS_RATING:
-            self.alert(f"❌ REJECTED S3: RS {rs:.0f} < 70")
-            return False, "RS_BELOW_70"
         
         rs_min = S4_MIN_RS_SCORE if strat == "S4_LEADERSHIP" else S3_MIN_RS_SCORE
         if rs < rs_min:
@@ -496,12 +492,12 @@ class ExecutionAgent:
             print(f"[ExecutionAgent] {sym} REJECTED by master_checklist: {reason}")
             return
 
-        approved, appr_reason = self.risk.approve_trade(strat, entry, stop, sym)
+        approved, appr_reason = self.risk.approve_trade(signal)
         if not approved:
             self.alert(f"⚠️ *{strat} BLOCKED*\n`{sym}` — {appr_reason}")
             return
 
-        qty = self.risk.calculate_qty(entry, stop)
+        qty = self.risk.calculate_position_size(entry, stop)
         if qty <= 0:
             return
 
@@ -509,28 +505,18 @@ class ExecutionAgent:
         trigger_px = round(signal["entry_price"], 1)          # The exact pivot crossing
         limit_px   = round(signal["entry_price"] * 1.002, 1)  # Capped at 0.2% slippage
         try:
-            if PAPER_MODE:
-                from paper_broker import PaperBroker
-                entry_oid = PaperBroker.instance().place_order(
-                    symbol=sym, qty=qty, 
-                    price=limit_px,
-                    trigger_price=trigger_px,
-                    order_type=self.kite.ORDER_TYPE_SL, product=self.kite.PRODUCT_CNC,
-                    transaction_type="BUY"
-                )
-            else:
-                entry_oid = self.kite.place_order(
-                    variety=self.kite.VARIETY_REGULAR,
-                    exchange=self.kite.EXCHANGE_NSE,
-                    tradingsymbol=sym,
-                    transaction_type=self.kite.TRANSACTION_TYPE_BUY,
-                    quantity=qty,
-                    product=self.kite.PRODUCT_CNC,
-                    order_type=self.kite.ORDER_TYPE_SL,
-                    price=limit_px,
-                    trigger_price=trigger_px,
-                    validity=self.kite.VALIDITY_DAY
-                )
+            entry_oid = self.kite.place_order(
+                variety=self.kite.VARIETY_REGULAR,
+                exchange=self.kite.EXCHANGE_NSE,
+                tradingsymbol=sym,
+                transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                quantity=qty,
+                product=self.kite.PRODUCT_CNC,
+                order_type=self.kite.ORDER_TYPE_SL,
+                price=limit_px,
+                trigger_price=trigger_px,
+                validity=self.kite.VALIDITY_DAY
+            )
         except Exception as e:
             self.alert(f"❌ *{strat} ORDER FAILED*\n`{sym}`: {e}")
             return
@@ -630,20 +616,12 @@ class ExecutionAgent:
                     if weeks < 3:
                         partial_qty = max(1, qty // 3)
                         try:
-                            if PAPER_MODE:
-                                from paper_broker import PaperBroker
-                                PaperBroker.instance().place_order(
-                                    symbol=sym, qty=partial_qty, price=ltp,
-                                    order_type="LIMIT", product="CNC",
-                                    transaction_type="SELL"
-                                )
-                            else:
-                                self.kite.place_order(
-                                    variety="regular", exchange="NSE",
-                                    tradingsymbol=sym, transaction_type="SELL",
-                                    quantity=partial_qty, product="CNC",
-                                    order_type="LIMIT", price=ltp
-                                )
+                            self.kite.place_order(
+                                variety="regular", exchange="NSE",
+                                tradingsymbol=sym, transaction_type="SELL",
+                                quantity=partial_qty, product="CNC",
+                                order_type="LIMIT", price=ltp
+                            )
                             trade["partial_filled"] = True
                             trade["remaining_qty"] = qty - partial_qty
                             self.state.save(oid, trade)
@@ -665,20 +643,12 @@ class ExecutionAgent:
                     if new_pivot > entry_high * 1.05:  # 5% new pivot
                         add_qty = max(1, trade["qty"] // 2)
                         try:
-                            if PAPER_MODE:
-                                from paper_broker import PaperBroker
-                                PaperBroker.instance().place_order(
-                                    symbol=sym, qty=add_qty, price=ltp,
-                                    order_type="LIMIT", product="CNC",
-                                    transaction_type="BUY"
-                                )
-                            else:
-                                self.kite.place_order(
-                                    variety="regular", exchange="NSE",
-                                    tradingsymbol=sym, transaction_type="BUY",
-                                    quantity=add_qty, product="CNC",
-                                    order_type="LIMIT", price=ltp
-                                )
+                            self.kite.place_order(
+                                variety="regular", exchange="NSE",
+                                tradingsymbol=sym, transaction_type="BUY",
+                                quantity=add_qty, product="CNC",
+                                order_type="LIMIT", price=ltp
+                            )
                             trade["pyramid_added"] = True
                             trade["qty"] += add_qty
                             trade["remaining_qty"] += add_qty
@@ -731,26 +701,18 @@ class ExecutionAgent:
         sym = trade["symbol"]
         qty = trade.get("remaining_qty", trade["qty"])
         try:
-            if PAPER_MODE:
-                from paper_broker import PaperBroker
-                PaperBroker.instance().place_order(
-                    symbol=sym, qty=qty, price=ltp,
-                    order_type="LIMIT", product="CNC",
-                    transaction_type="SELL"
-                )
-            else:
-                self.kite.place_order(
-                    variety="regular", exchange="NSE",
-                    tradingsymbol=sym, transaction_type="SELL",
-                    quantity=qty, product="CNC",
-                    order_type="LIMIT", price=ltp
-                )
+            self.kite.place_order(
+                variety="regular", exchange="NSE",
+                tradingsymbol=sym, transaction_type="SELL",
+                quantity=qty, product="CNC",
+                order_type="LIMIT", price=ltp
+            )
         except Exception as e:
             self.alert(f"❌ *{reason} SELL FAILED* `{sym}`: {e}")
             return
 
         pnl = (ltp - trade["entry_price"]) * qty
-        self.risk.close_position(oid, pnl)
+        self.risk.close_position(oid, ltp)   # pass exit price, not pre-computed pnl
         self.state.close(oid)
         self.journal.log_exit(oid, trade, ltp, reason)
         self.active_trades.pop(oid, None)

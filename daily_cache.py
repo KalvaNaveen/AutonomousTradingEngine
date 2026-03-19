@@ -71,6 +71,7 @@ class DailyCache:
 
                 closes  = [d["close"]  for d in data]
                 volumes = [d["volume"] for d in data]
+                highs   = [d["high"]   for d in data]
 
                 ema25    = self._ema(closes, 25)[-1]
                 rsi14    = (self._rsi(closes, 14) or [50.0])[-1]
@@ -100,6 +101,7 @@ class DailyCache:
                     self._data[token] = {
                         "symbol":         symbol,
                         "closes":         closes,
+                        "highs":          highs,
                         "volumes":        volumes,
                         "ema25":          ema25,
                         "rsi14":          rsi14,
@@ -255,6 +257,10 @@ class DailyCache:
         with self._lock:
             return list(self._data.get(token, {}).get("closes", []))
 
+    def get_highs(self, token: int) -> list:
+        with self._lock:
+            return list(self._data.get(token, {}).get("highs", []))
+
     def get_ema25(self, token: int) -> float:
         with self._lock:
             return self._data.get(token, {}).get("ema25", 0.0)
@@ -307,7 +313,19 @@ class DailyCache:
     def get_rs_score(self, token: int) -> int:
         with self._lock:
             return self._data.get(token, {}).get("rs_score", 0)
-
+    def get_sector_rs(self, symbol: str) -> int:
+        """
+        Returns sector-level RS score for a symbol.
+        v12 proxy: uses the stock's own RS score.
+        True sector RS computation (Nifty IT/Auto/Pharma index RS) is a v13 addition.
+        Stops scan_s4_leadership() from crashing with AttributeError.
+        """
+        with self._lock:
+            for token, d in self._data.items():
+                if d.get("symbol") == symbol:
+                    return d.get("rs_score", 50)
+        return 50
+    
     def is_circuit_breaker(self, token: int, ltp: float) -> bool:
         with self._lock:
             d = self._data.get(token, {})

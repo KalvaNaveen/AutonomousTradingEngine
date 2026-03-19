@@ -380,8 +380,8 @@ class ScannerAgent:
             if rs < S3_MIN_RS_SCORE:
                 continue
 
-            pivot = vcp["pivot_price"]
-            stop  = vcp["stop_price"]
+            pivot = vcp["pivot"]
+            stop  = vcp["stop"]
             stop_pct = (pivot - stop) / pivot if pivot > 0 else 1.0
             if stop_pct > S3_MAX_STOP_PCT:
                 continue
@@ -396,7 +396,7 @@ class ScannerAgent:
                 "partial_target":  round(pivot * (1 + S3_PARTIAL_EXIT_PCT), 2),
                 "rs_score":        rs,
                 "vcp_contractions": vcp["n_contractions"],
-                "vcp_final_depth":  vcp["final_depth_pct"],
+                "vcp_final_depth":  vcp["final_depth"],
                 "product":         "CNC",
                 "max_hold_days":   S3_MAX_HOLD_DAYS,
                 "entry_time":      None,
@@ -493,7 +493,7 @@ class ScannerAgent:
                 "token": token,
                 "entry_price": current * 1.005,  # 0.5% above LTP
                 "stop_price": stop,
-                "target_price": round(current * 1.40, 2),
+                "target_price": round(current * (1 + S4_TARGET_SWING_PCT), 2),
                 "partial_target": round(current * (1 + S4_PARTIAL_EXIT_PCT), 2),
                 "rs_score": rs,
                 "rvol": round(rvol, 2),

@@ -41,6 +41,7 @@ class PaperBroker:
     ORDER_TYPE_MARKET  = "MARKET"
     ORDER_TYPE_LIMIT   = "LIMIT"
     ORDER_TYPE_SLM     = "SL-M"
+    ORDER_TYPE_SL      = "SL"      # stop-limit (trigger + limit price)
     TRANSACTION_TYPE_BUY  = "BUY"
     TRANSACTION_TYPE_SELL = "SELL"
     VALIDITY_DAY = "DAY"
@@ -200,11 +201,16 @@ class PaperBroker:
                 should_fill = True
                 fill_price  = max(ltp, o["price"])
 
-        elif ot == self.ORDER_TYPE_SLM:
+        elif ot in (self.ORDER_TYPE_SLM, self.ORDER_TYPE_SL):
             if tt == self.TRANSACTION_TYPE_SELL and ltp <= o["trigger_price"]:
                 should_fill = True   # SL triggered — market fill at LTP
+                # SL (stop-limit): cap fill at limit price, don't fill below it
+                if ot == self.ORDER_TYPE_SL and o["price"] > 0:
+                    fill_price = max(ltp, o["price"])
             elif tt == self.TRANSACTION_TYPE_BUY and ltp >= o["trigger_price"]:
                 should_fill = True
+                if ot == self.ORDER_TYPE_SL and o["price"] > 0:
+                    fill_price = min(ltp, o["price"])
 
         if should_fill:
             self._fill(oid, fill_price)

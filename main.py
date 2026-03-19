@@ -294,7 +294,7 @@ class BNFEngine:
         universe_count = len(self.data.UNIVERSE) if self.data else 0
         fund_loaded = self.fundamental_agent and self.fundamental_agent.is_loaded()
         self.execution.alert(
-            f"🔔 *BNF ENGINE v14 — ARMED*\n"
+            f"🔔 *BNF ENGINE v12 — ARMED*\n"
             f"Date: `{today_ist()}`\n"
             f"Regime: `{self.regime}`\n"
             f"Universe: `{universe_count}` symbols\n"
@@ -329,6 +329,20 @@ class BNFEngine:
     # ── Every 60 seconds: main tick ──────────────────────────────
 
     def tick(self):
+        try:
+            self._tick_inner()
+        except Exception as e:
+            print(f"[Engine] tick() ERROR: {type(e).__name__}: {e}")
+            if self.execution:
+                try:
+                    self.execution.alert(
+                        f"🚨 *ENGINE TICK ERROR*\n"
+                        f"`{type(e).__name__}: {str(e)[:200]}`"
+                    )
+                except Exception:
+                    pass
+
+    def _tick_inner(self):
         if not self.token_ok or not self.execution:
             return
         if self.risk.engine_stopped:
@@ -363,6 +377,12 @@ class BNFEngine:
             new_regime = self.scanner.detect_regime()
             if new_regime != self.regime:
                 print(f"[Engine] Regime: {self.regime} → {new_regime}")
+                _emoji = {"BULL":"🟢","BULL_WATCH":"🟡","NORMAL":"🔵",
+                          "BEAR_PANIC":"🔴","CHOP":"⚫","EXTREME_PANIC":"🆘"
+                         }.get(new_regime, "⚪")
+                self.execution.alert(
+                    f"{_emoji} *REGIME CHANGE*\n`{self.regime}` → `{new_regime}`"
+                )
                 self.regime = new_regime
                 if self.regime == "EXTREME_PANIC":
                     self.s1_signals = []
@@ -436,7 +456,7 @@ class BNFEngine:
                 f"Realised PnL: ₹`{s['realised_pnl']:+,.2f}`\n"
                 f"Margin deployed: ₹`{s['capital_deployed']:,.0f}`"
             )
-        self.execution.alert("🔴 *BNF ENGINE v14 — MARKET CLOSED*")
+        self.execution.alert("🔴 *BNF ENGINE v12 — MARKET CLOSED*")
 
     # ── Helper ────────────────────────────────────────────────────
 
