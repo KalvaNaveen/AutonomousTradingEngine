@@ -418,7 +418,7 @@ class ScannerAgent:
             return []
 
         # [v15] Regime-adaptive RS threshold
-        regime = self._mkt_status.detect_regime() if self._mkt_status else "NORMAL"
+        regime = self._mkt_status.detect() if self._mkt_status else "NORMAL"
         rs_threshold = {
             "EXTREME_PANIC": 95,
             "BEAR_PANIC": 90,      # Top 10% only in panic
