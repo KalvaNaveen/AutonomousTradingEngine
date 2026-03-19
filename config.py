@@ -63,6 +63,20 @@ MAX_POSITION_PCT        = 0.20
 NIFTY50_TOKEN       = 256265
 INDIA_VIX_TOKEN     = 264969
 
+# [v13] Phase 3: Sectoral Indices for SectorAgent
+SECTOR_TOKENS = {
+    "NIFTY BANK":   260105,
+    "NIFTY IT":     259849,
+    "NIFTY AUTO":   263433,
+    "NIFTY FMCG":   261129,
+    "NIFTY METAL":  263689,
+    "NIFTY REALTY": 261897,
+    "NIFTY ENERGY": 261385,
+    "NIFTY PHARMA": 262153,
+    "NIFTY INFRA":  261641,
+    "NIFTY PSE":    262665
+}
+
 # ── 4-Tier Regime Thresholds ──────────────────────────────────
 VIX_BEAR_PANIC      = 22.5
 VIX_NORMAL_HIGH     = 22.0
@@ -82,7 +96,9 @@ S1_DEVIATION_BULL       = 0.20
 S1_DEVIATION_MAX        = 0.35
 S1_RSI_THRESHOLD        = 38
 S1_VOLUME_MULTIPLIER    = 1.5
-S1_HARD_STOP_PCT        = 0.07
+S1_ATR_PERIOD           = 14
+S1_ATR_STOP_MULTIPLIER  = 2.0     # stop = entry - (ATR_14 × 2.0)
+S1_HARD_STOP_PCT        = 0.10    # absolute max stop (safety cap: 10%)
 S1_MAX_HOLD_DAYS        = 3
 S1_MIN_TURNOVER_CR      = 100
 
@@ -126,6 +142,20 @@ S4_MIN_TURNOVER_CR       = 100    # Momentum breakouts need moderate liquidity
 S4_BREAKEVEN_MOVE_PCT    = 0.10   # Breakeven after +10%
 S4_STALL_WEEKS           = 3
 S4_TARGET_SWING_PCT      = 0.40   # 40% swing target for S4 leadership breakouts
+
+# ── Strategy 5: VWAP + ORB Intraday (MIS, v13) ──────────────────────
+# Professional day-trading backbone: Opening Range Breakout confirmed by VWAP.
+# Runs 09:45–14:30, auto-exits by 15:00.
+S5_ORB_PERIOD_MINUTES    = 15      # opening range = first 15 min (09:15–09:30)
+S5_MIN_ORB_PCT           = 0.005   # min 0.5% ORB range (skip tiny-range days)
+S5_MAX_ORB_PCT           = 0.03    # max 3% ORB range (skip gap/volatile days)
+S5_VWAP_PROXIMITY_PCT    = 0.005   # entry within 0.5% of VWAP (confirmation)
+S5_ATR_STOP_MULTIPLIER   = 1.5     # stop = 1.5× ATR below entry
+S5_TARGET_RR             = 2.0     # target = 2× risk distance from entry
+S5_MIN_TURNOVER_CR       = 500     # only highly liquid stocks
+S5_MIN_RVOL              = 1.3     # minimum Relative Volume for entry
+S5_MAX_TRADES_PER_DAY    = 3       # discipline cap
+S5_HARD_STOP_PCT         = 0.015   # absolute max stop 1.5% (intraday safety)
 
 # ── Superperformance Stock Profile (Minervini PDF page 13) ──────────
 # NSE India mid-cap equivalent: ₹300 Cr – ₹5,000 Cr market cap.

@@ -44,6 +44,29 @@ class DataAgent:
                 nifty_df = pd.read_csv(csv_path)
                 if 'Symbol' in nifty_df.columns:
                     target_list = nifty_df['Symbol'].tolist()
+                    
+                    # [v13] Phase 3: Map Industry to NSE Sector for SectorAgent
+                    self.SYMBOL_TO_SECTOR = {}
+                    if 'Industry' in nifty_df.columns:
+                        ind_map = {
+                            'Financial Services': 'NIFTY BANK',
+                            'Information Technology': 'NIFTY IT',
+                            'Automobile and Auto Components': 'NIFTY AUTO',
+                            'Automobile': 'NIFTY AUTO',
+                            'Fast Moving Consumer Goods': 'NIFTY FMCG',
+                            'Metals & Mining': 'NIFTY METAL',
+                            'Realty': 'NIFTY REALTY',
+                            'Oil Gas & Consumable Fuels': 'NIFTY ENERGY',
+                            'Power': 'NIFTY ENERGY',
+                            'Healthcare': 'NIFTY PHARMA',
+                            'Construction': 'NIFTY INFRA',
+                            'Construction Materials': 'NIFTY INFRA'
+                        }
+                        for _, row in nifty_df.iterrows():
+                            ind = str(row.get('Industry', ''))
+                            sect = ind_map.get(ind)
+                            if sect:
+                                self.SYMBOL_TO_SECTOR[row['Symbol']] = sect
                 else:
                     print(f"[DataAgent] CRITICAL: 'Symbol' column not found in {csv_path}")
             else:
@@ -58,7 +81,7 @@ class DataAgent:
             missing  = target - set(self.UNIVERSE.values())
             missing_list = sorted(list(missing))
             print(f"[DataAgent] Universe loaded: {loaded}/{expected} symbols "
-                  f"(post-dedup unique tokens: {loaded})")
+                  f"({len(getattr(self, 'SYMBOL_TO_SECTOR', {}))} mapped to sectors)")
             if expected > 0 and loaded < expected * 0.95:
                 msg = (f"⚠️ *UNIVERSE INCOMPLETE*\n"
                        f"`{loaded}/{expected}` symbols loaded.\n"

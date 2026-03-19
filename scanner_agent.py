@@ -19,14 +19,16 @@ class ScannerAgent:
 
     def __init__(self, data_agent: DataAgent, blackout_calendar,
                  fundamental_agent=None, stage_agent=None,
-                 vcp_agent=None, market_status_agent=None):
+                 vcp_agent=None, market_status_agent=None,
+                 sector_agent=None):
         self.data       = data_agent
         self.blackout   = blackout_calendar
-        # [v10] Minervini agents — optional, injected by main.py
+        # [v10/v13] Intelligence layer & Minervini agents
         self._fundamental = fundamental_agent
         self._stage       = stage_agent
         self._vcp         = vcp_agent
         self._mkt_status  = market_status_agent
+        self._sector_agent = sector_agent
 
     def detect_regime(self) -> str:
         """
@@ -198,7 +200,21 @@ class ScannerAgent:
                 continue
 
             support    = self.data.compute_pivot_support(token)
-            stop_price = max(current * (1 - S1_HARD_STOP_PCT), support * 0.98)
+
+            # [v13] ATR-based stop: entry - (ATR × multiplier)
+            # Replaces the old prior-close stop that gave 0.28% stops
+            atr = 0.0
+            if cache_ready:
+                atr = self.data.daily_cache.get_atr(token)
+            if atr <= 0:
+                atr = current * 0.03   # fallback: 3% of price
+            atr_stop = current - (atr * S1_ATR_STOP_MULTIPLIER)
+            # Floor: pivot support, ceiling: hard cap at S1_HARD_STOP_PCT
+            hard_floor = current * (1 - S1_HARD_STOP_PCT)
+            stop_price = max(atr_stop, hard_floor, support * 0.98)
+            # Sanity: stop must be below entry
+            if stop_price >= current * 0.995:
+                continue   # stop too tight, skip this signal
 
             signals.append({
                 "strategy":       "S1_EMA_DIVERGENCE",
@@ -212,6 +228,7 @@ class ScannerAgent:
                 "deviation_pct":  round(dev * 100, 2),
                 "rsi":            round(rsi, 1),
                 "rvol":           round(vol_ratio, 2),
+                "atr":            round(atr, 2),
                 "product":        "CNC",
                 "max_hold_days":  S1_MAX_HOLD_DAYS,
                 "entry_time":     None,
@@ -507,3 +524,142 @@ class ScannerAgent:
             })
 
         return sorted(signals, key=lambda x: x["rs_score"], reverse=True)[:3]
+
+    # ── [v13] S5: VWAP + Opening Range Breakout ─────────────────────
+
+    def scan_s5_vwap_orb(self) -> list:
+        """
+        Professional intraday VWAP+ORB strategy.
+        Runs 09:45–14:30 only (after ORB period is locked).
+
+        Entry conditions (ALL must be true):
+        1. ORB period complete (first 15 min candle locked)
+        2. ORB range between 0.5%–3% of price
+        3. Price breaks ABOVE ORB high
+        4. Price is ABOVE VWAP (VWAP confirmation)
+        5. Volume is ≥ 1.3× average daily volume by this time
+        6. Stock is highly liquid (avg turnover > ₹500 Cr)
+
+        Stop: max(VWAP, ORB low, entry - ATR×1.5)
+        Target: entry + 2× (entry - stop)
+        Product: MIS (intraday, squared off by 15:00)
+        """
+        now_t = now_ist().time()
+        # Only scan after ORB period (09:30) and before 14:30
+        if now_t < datetime.time(9, 45) or now_t > datetime.time(14, 30):
+            return []
+
+        tick_store  = self.data.tick_store
+        daily_cache = self.data.daily_cache
+        if not tick_store or not daily_cache:
+            return []
+
+        signals = []
+        universe = self.data.UNIVERSE if self.data else {}
+
+        for token, symbol in universe.items():
+            try:
+                # Skip if blackout
+                if self.blackout and self.blackout.is_blackout(symbol):
+                    continue
+
+                # Liquidity filter — only highly liquid stocks
+                avg_turn = daily_cache.get_avg_turnover_cr(token)
+                if avg_turn < S5_MIN_TURNOVER_CR:
+                    continue
+
+                # Get ORB data
+                orb = tick_store.get_orb(token)
+                if not orb.get("orb_locked"):
+                    continue  # ORB period not complete yet
+
+                orb_high = orb["orb_high"]
+                orb_low  = orb["orb_low"]
+                orb_range_pct = orb.get("orb_range_pct", 0)
+
+                # ORB range filter
+                if orb_range_pct < S5_MIN_ORB_PCT or orb_range_pct > S5_MAX_ORB_PCT:
+                    continue
+
+                # Get current price
+                ltp = tick_store.get_ltp_if_fresh(token)
+                if ltp <= 0:
+                    continue
+
+                # ORB breakout: price must be above ORB high
+                if ltp <= orb_high:
+                    continue
+
+                # VWAP confirmation: price must be above VWAP
+                vwap = tick_store.get_vwap(token)
+                if vwap <= 0 or ltp < vwap:
+                    continue
+
+                # VWAP proximity: entry should be within 0.5% of VWAP
+                vwap_dist = abs(ltp - vwap) / vwap
+                if vwap_dist > S5_VWAP_PROXIMITY_PCT * 5:
+                    # If price is too far above VWAP (>2.5%), skip
+                    # This avoids chasing extended stocks
+                    continue
+
+                # Volume confirmation
+                day_vol = tick_store.get_volume(token)
+                avg_vol = daily_cache.get_avg_daily_vol(token)
+                if avg_vol <= 0:
+                    continue
+                rvol = day_vol / avg_vol
+                if rvol < S5_MIN_RVOL:
+                    continue
+
+                # Circuit breaker check
+                if daily_cache.is_circuit_breaker(token, ltp):
+                    continue
+
+                # Compute stop price: max(VWAP, ORB low, entry - ATR×1.5)
+                atr = daily_cache.get_atr(token)
+                if atr <= 0:
+                    atr = ltp * 0.01  # fallback 1%
+
+                atr_stop  = ltp - (atr * S5_ATR_STOP_MULTIPLIER)
+                hard_stop = ltp * (1 - S5_HARD_STOP_PCT)
+                # Use the tightest reasonable stop
+                stop_price = max(vwap, orb_low, atr_stop, hard_stop)
+
+                # Stop must be below entry (sanity)
+                if stop_price >= ltp * 0.998:
+                    continue
+
+                risk = ltp - stop_price
+                if risk <= 0:
+                    continue
+
+                # Target: 2× risk (minimum 2:1 R:R)
+                target_price = ltp + (risk * S5_TARGET_RR)
+
+                signals.append({
+                    "strategy":       "S5_VWAP_ORB",
+                    "symbol":         symbol,
+                    "token":          token,
+                    "entry_price":    round(ltp, 2),
+                    "stop_price":     round(stop_price, 2),
+                    "target_price":   round(target_price, 2),
+                    "partial_target": round(ltp + risk, 2),  # 1:1 partial
+                    "vwap":           round(vwap, 2),
+                    "orb_high":       round(orb_high, 2),
+                    "orb_low":        round(orb_low, 2),
+                    "orb_range_pct":  round(orb_range_pct * 100, 2),
+                    "rvol":           round(rvol, 2),
+                    "atr":            round(atr, 2),
+                    "rr":             round(S5_TARGET_RR, 1),
+                    "product":        "MIS",
+                    "entry_time":     None,
+                    "entry_date":     None,
+                })
+
+            except Exception as e:
+                print(f"[Scanner] S5 error {symbol}: {e}")
+                continue
+
+        # Sort by R:R confirmation quality (closest to VWAP = best confirmation)
+        signals.sort(key=lambda x: abs(x["entry_price"] - x["vwap"]))
+        return signals[:S5_MAX_TRADES_PER_DAY]

@@ -52,16 +52,17 @@ from scanner_agent import ScannerAgent
 from risk_agent import RiskAgent
 from journal import Journal
 from execution_agent import ExecutionAgent
-# [v10] Minervini agents
 from fundamental_agent import FundamentalAgent
 from stage_agent import StageAgent
 from vcp_agent import VCPAgent
 from market_status_agent import MarketStatusAgent
+from sector_agent import SectorAgent
+from earnings_agent import EarningsAgent
 
 RESULTS_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "test_results.json"
 )
-TOTAL_TESTS  = 21
+TOTAL_TESTS  = 24
 
 
 class PaperAgent:
@@ -143,6 +144,12 @@ class PaperAgent:
         self._test_vcp_detection()
         self._test_market_status_detection()
         self._test_master_checklist()
+        
+        # Tests 21-23: [v13] S5 Day Trading & Intelligence Layer guards
+        self._test_s5_vwap_orb_scan()
+        self._test_sector_agent()
+        self._test_earnings_agent()
+        
         self._test_backtest_minervini()
 
         # Telegram + report
@@ -199,7 +206,11 @@ class PaperAgent:
 
         # DataAgent — load universe (instruments REST, once)
         self.data = DataAgent(self.real_kite)
-        print(f"  Universe: {len(self.data.UNIVERSE)} symbols")
+        
+        # [v13] Fast test mode: limit to 30 symbols to avoid 3-min DailyCache preload
+        fast_universe = dict(list(self.data.UNIVERSE.items())[:30])
+        self.data.UNIVERSE = fast_universe
+        print(f"  Universe (Truncated for fast tests): {len(self.data.UNIVERSE)} symbols")
 
         # Build subscription token list
         sub_tokens = (list(self.data.UNIVERSE.keys()) +
@@ -261,10 +272,19 @@ class PaperAgent:
             self.daily_cache, self.tick_store, NIFTY50_TOKEN
         )
 
-        # [v11] Inject into execution for master_checklist()
+        # [v13] Phase 3 Intelligence Layer
+        self.sector_agent        = SectorAgent(self.daily_cache, self.tick_store)
+        self.earnings_agent      = EarningsAgent()
+        print("  Preloading earnings calendar...")
+        self.earnings_agent.preload(list(self.data.UNIVERSE.values()))
+
+        # [v11/13] Inject into execution for master_checklist() and Sit on Hands
         self.execution._stage_agent       = self.stage_agent
         self.execution._fundamental_agent = self.fundamental_agent
+        self.execution._sector_agent      = self.sector_agent
+        self.execution._earnings_agent    = self.earnings_agent
         self.execution._data_universe     = self.data.UNIVERSE
+        self.execution._symbol_to_sector  = getattr(self.data, 'SYMBOL_TO_SECTOR', {})
 
         # Inject into scanner
         self.scanner = ScannerAgent(
@@ -273,8 +293,9 @@ class PaperAgent:
             stage_agent=self.stage_agent,
             vcp_agent=self.vcp_agent,
             market_status_agent=self.market_status_agent,
+            sector_agent=self.sector_agent,
         )
-        print("  Engine stack ready (v12 with Minervini).\n")
+        print("  Engine stack ready (v13 with Intelligence Layer).\n")
 
     # ── Test 3 [NEW v6]: websocket_connected ──────────────────────────
 
@@ -864,10 +885,55 @@ class PaperAgent:
         except Exception as e:
             self._fail("master_checklist", str(e))
 
-    # ── Test 21 [v12]: backtest_minervini ────────────────────────────
+    # ── Test 21 [v13]: s5_vwap_orb_scan ─────────────────────────────────
+
+    def _test_s5_vwap_orb_scan(self):
+        print("\n[21/24] s5_vwap_orb_scan ...")
+        try:
+            signals = self.scanner.scan_s5_vwap_orb()
+            self._pass("s5_vwap_orb_scan",
+                       f"Scan ran. Found {len(signals)} day trade signals.")
+        except Exception as e:
+            self._fail("s5_vwap_orb_scan", str(e))
+
+    # ── Test 22 [v13]: sector_agent ─────────────────────────────────────
+
+    def _test_sector_agent(self):
+        print("\n[22/24] sector_agent ...")
+        try:
+            if not getattr(self, 'sector_agent', None):
+                self._fail("sector_agent", "Agent missing")
+                return
+            
+            # Force an update so it populates from daily_cache
+            self.sector_agent.update()
+            
+            hot = self.sector_agent.hot_sectors
+            cold = self.sector_agent.cold_sectors
+            self._pass("sector_agent",
+                       f"{len(hot)} Hot sectors, {len(cold)} Cold sectors.")
+        except Exception as e:
+            self._fail("sector_agent", str(e))
+
+    # ── Test 23 [v13]: earnings_agent ───────────────────────────────────
+
+    def _test_earnings_agent(self):
+        print("\n[23/24] earnings_agent ...")
+        try:
+            if not getattr(self, 'earnings_agent', None):
+                self._fail("earnings_agent", "Agent missing")
+                return
+            imminent_count = sum(1 for sym in list(self.data.UNIVERSE.values())[:20] 
+                                 if self.earnings_agent.is_earnings_imminent(sym))
+            self._pass("earnings_agent",
+                       f"{imminent_count} in sample of 20 have imminent earnings.")
+        except Exception as e:
+            self._fail("earnings_agent", str(e))
+
+    # ── Test 24 [v12]: backtest_minervini ────────────────────────────
 
     def _test_backtest_minervini(self):
-        print("\n[21/21] backtest_minervini ...")
+        print("\n[24/24] backtest_minervini ...")
         try:
             result = backtest_minervini(self.real_kite, self.data.UNIVERSE,
                                        days_back=120)

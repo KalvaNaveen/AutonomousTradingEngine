@@ -49,6 +49,20 @@ class TickStore:
             "_current_candle": None,
             "last_tick_at":    None,   # datetime of last received tick
         })
+        # [v13] VWAP: running cumulative price×volume and cumulative volume
+        self._vwap = defaultdict(lambda: {
+            "cum_pv": 0.0,       # Σ(price × volume)
+            "cum_vol": 0,        # Σ(volume)
+            "vwap": 0.0,         # current VWAP
+            "sum_sq_dev": 0.0,   # for standard deviation band
+            "tick_count": 0,
+        })
+        # [v13] ORB: Opening Range high/low (first 15 min: 09:15–09:30)
+        self._orb = defaultdict(lambda: {
+            "orb_high": 0.0,
+            "orb_low":  999999.0,
+            "orb_locked": False,  # True after 09:30
+        })
         self._lock         = threading.Lock()
         self._ready        = False
         self._last_tick_at = None   # most recent tick time across all tokens
@@ -100,6 +114,29 @@ class TickStore:
                         "ask_qty":       aq,
                         "bid_ask_ratio": bq / max(aq, 1),
                     }
+
+                # [v13] VWAP update — incremental on every tick
+                if ltp > 0 and vol > 0:
+                    v = self._vwap[token]
+                    v["cum_pv"]  += ltp * vol
+                    v["cum_vol"] += vol
+                    if v["cum_vol"] > 0:
+                        v["vwap"] = v["cum_pv"] / v["cum_vol"]
+                    v["tick_count"] += 1
+
+                # [v13] ORB tracking — first 15 minutes
+                orb = self._orb[token]
+                if not orb["orb_locked"] and ltp > 0:
+                    tick_time = ts or now_ist()
+                    if isinstance(tick_time, datetime.datetime):
+                        t = tick_time.time()
+                        if t < datetime.time(9, 30):
+                            if ltp > orb["orb_high"]:
+                                orb["orb_high"] = ltp
+                            if ltp < orb["orb_low"]:
+                                orb["orb_low"] = ltp
+                        else:
+                            orb["orb_locked"] = True
 
             # Queue candle update — processed below, lock not held
             if ts and isinstance(ts, datetime.datetime) and ltp > 0:
@@ -218,3 +255,41 @@ class TickStore:
 
     def is_ready(self) -> bool:
         return self._ready
+
+    # ── [v13] VWAP + ORB readers ──────────────────────────────────────
+
+    def get_vwap(self, token: int) -> float:
+        """Returns current intraday VWAP for a token."""
+        with self._lock:
+            return self._vwap[token]["vwap"]
+
+    def get_vwap_distance(self, token: int) -> float:
+        """Returns (ltp - vwap) / vwap as a fraction. Positive = above VWAP."""
+        with self._lock:
+            vwap = self._vwap[token]["vwap"]
+            ltp  = self._store[token]["last_price"]
+        if vwap <= 0:
+            return 0.0
+        return (ltp - vwap) / vwap
+
+    def get_orb(self, token: int) -> dict:
+        """
+        Returns ORB (Opening Range Breakout) data.
+        {"orb_high": float, "orb_low": float, "orb_locked": bool, "orb_range_pct": float}
+        """
+        with self._lock:
+            orb = dict(self._orb[token])
+        if orb["orb_high"] > 0 and orb["orb_low"] < 999999:
+            orb["orb_range_pct"] = (orb["orb_high"] - orb["orb_low"]) / orb["orb_low"]
+        else:
+            orb["orb_range_pct"] = 0.0
+        return orb
+
+    def reset_daily(self):
+        """
+        [v13] Reset VWAP and ORB data for a new trading day.
+        Call at pre_market or after end_of_day.
+        """
+        with self._lock:
+            self._vwap.clear()
+            self._orb.clear()

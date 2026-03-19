@@ -190,3 +190,25 @@ class Journal:
              "gross_pnl": r[2], "exit_reason": r[3]}
             for r in rows
         ]
+
+    def get_all_trades_for_date(self, date_str: str = None) -> list:
+        """
+        Returns every trade for a given date, ordered by timestamp.
+        Used by report_agent to build the per-trade log in the daily report.
+        Returns list of dicts: [{symbol, entry_price, full_exit_price,
+                                  gross_pnl, exit_reason}, ...]
+        """
+        d = date_str or today_ist().isoformat()
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            rows = conn.execute("""
+                SELECT symbol, entry_price, full_exit_price,
+                       gross_pnl, exit_reason
+                FROM trades
+                WHERE date = ?
+                ORDER BY timestamp ASC
+            """, (d,)).fetchall()
+        return [
+            {"symbol": r[0], "entry_price": r[1], "full_exit_price": r[2],
+             "gross_pnl": r[3], "exit_reason": r[4]}
+            for r in rows
+        ]

@@ -104,8 +104,26 @@ class ExecutionAgent:
             print(f"[Exec] REJECTED {signal['symbol']}: {reason}")
             return False
 
+        # [v13 Phase 3] "Sit on Hands" Sector Guard for Swing Trades
+        sym = signal.get("symbol", "")
+        strat = signal.get("strategy", "")
+        if strat in ["S1_EMA_DIVERGENCE", "S3_SEPA_VCP", "S4_LEADERSHIP"]:
+            if getattr(self, '_sector_agent', None):
+                sector = getattr(self, '_symbol_to_sector', {}).get(sym)
+                if sector and self._sector_agent.is_cold(sector):
+                    print(f"[Exec] REJECTED {sym}: Sector {sector} is COLD (Sit on Hands)")
+                    return False
+            
+            # [v13 Phase 3] Earnings Event Guard
+            if getattr(self, '_earnings_agent', None):
+                if self._earnings_agent.is_earnings_imminent(sym, days=5):
+                    print(f"[Exec] REJECTED {sym}: Earnings imminent within 5 days (Event Guard)")
+                    return False
+
         qty = self.risk.calculate_position_size(
-            signal["entry_price"], signal["stop_price"]
+            signal["entry_price"], signal["stop_price"],
+            regime=regime,
+            strategy=signal.get("strategy", "")
         )
         if qty == 0:
             return False
@@ -179,11 +197,12 @@ class ExecutionAgent:
 
         strat_label = ("S1" if signal["strategy"] == "S1_EMA_DIVERGENCE"
                        else "S2")
+        partial_str = f"₹{partial_price:.2f}" if partial_price else "₹0"
         self.alert(
             f"🟢 *EXECUTED {strat_label} — Qty:{qty} | R:R {rr:.2f}*\n"
             f"`{signal['symbol']}` | `{regime}` | `{signal['strategy']}`\n"
             f"Entry: ₹`{signal['entry_price']:.2f}` | Qty: `{qty}`\n"
-            f"Partial: ₹`{partial_price:.2f if partial_price else 0}`\n"
+            f"Partial: `{partial_str}`\n"
             f"Target: ₹`{signal['target_price']:.2f}` | "
             f"Stop: ₹`{signal['stop_price']:.2f}`\n"
             f"R:R `{rr:.2f}` | RVOL `{signal.get('rvol', 0):.2f}`\n"
@@ -245,6 +264,13 @@ class ExecutionAgent:
                     continue
                 if now.time() >= datetime.time(15, 14):
                     self._force_exit(oid, trade, "EOD_MIS_SQUAREOFF")
+                    continue
+
+            # [v13] S5 VWAP/ORB intraday monitoring
+            if trade["strategy"] == "S5_VWAP_ORB":
+                # Auto-exit at 15:00 (before exchange 15:15 auto-squareoff)
+                if now.time() >= datetime.time(15, 0):
+                    self._force_exit(oid, trade, "S5_EOD_EXIT_15:00")
                     continue
 
             if trade["strategy"] == "S1_EMA_DIVERGENCE":
@@ -323,43 +349,24 @@ class ExecutionAgent:
         self.active_trades.pop(oid, None)
 
     def daily_summary_alert(self, regime: str, total_scans: int = 0):
+        from report_agent import build_daily_report
         stats = self.risk.get_daily_stats()
         self.journal.log_daily_summary(
             stats, regime,
             self.risk.engine_stopped, self.risk.stop_reason
         )
-        regime_data = self.journal.win_rate_by_regime()
-        regime_lines = ""
-        if regime_data:
-            regime_lines = "\n*All-time by regime:*\n" + "\n".join([
-                f"• `{r[0]}`: {r[2]}% WR | ₹{r[3]} avg | {r[1]} trades"
-                for r in regime_data
-            ])
 
-        # Top 3 actions of the day
-        top_actions = self.journal.get_today_top_actions(n=3)
-        top_lines = ""
-        if top_actions:
-            top_lines = "\n*🏆 Top 3 actions today:*\n" + "\n".join([
-                f"• `{a['symbol']}` {a['strategy']} "
-                f"₹`{a['gross_pnl']:+,.0f}` ({a['exit_reason']})"
-                for a in top_actions
-            ])
+        # All trades for the trade-log section
+        trades_today = self.journal.get_all_trades_for_date()
 
-        scans_line = f"\n🔄 Scans run today: `{total_scans}`" if total_scans else ""
-
-        self.alert(
-            f"📊 *BNF ENGINE v12 — DAILY SUMMARY*\n"
-            f"`{today_ist()}` | Regime: `{regime}`\n"
-            f"Trades: `{stats['total']}` | "
-            f"W:`{stats['wins']}` L:`{stats['losses']}` | "
-            f"WR:`{stats['win_rate']:.1f}%`\n"
-            f"PnL: ₹`{stats['gross_pnl']:+,.0f}`\n"
-            f"Streak: `{stats['loss_streak']}/3`"
-            f"{scans_line}"
-            f"{top_lines}"
-            f"{regime_lines}"
+        msg = build_daily_report(
+            stats=stats,
+            regime=regime,
+            trades_today=trades_today,
+            capital=self.risk.capital,
+            total_scans=total_scans,
         )
+        self.alert(msg)
 
 
     def alert(self, msg: str):
@@ -441,6 +448,23 @@ class ExecutionAgent:
             self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: RS {rs} < {rs_min}")
             return False, f"RS_{rs}"
 
+        # [v13 Phase 3] Sector Guard (Sit on Hands / Leadership requirement)
+        if getattr(self, '_sector_agent', None):
+            sector = getattr(self, '_symbol_to_sector', {}).get(sym)
+            if sector:
+                if self._sector_agent.is_cold(sector):
+                    self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Sector {sector} is COLD")
+                    return False, f"COLD_SECTOR_{sector}"
+                if strat == "S4_LEADERSHIP" and not self._sector_agent.is_hot(sector):
+                    self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: S4 requires HOT sector ({sector} is not hot)")
+                    return False, f"NOT_HOT_SECTOR"
+
+        # [v13 Phase 3] Earnings Event Guard
+        if getattr(self, '_earnings_agent', None):
+            if self._earnings_agent.is_earnings_imminent(sym, days=5):
+                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Earnings imminent within 5 days")
+                return False, "EARNINGS_IMMINENT"
+
         # Gate 9: Stop ≤ 8%
         entry = signal.get("entry_price", 0)
         stop  = signal.get("stop_price", 0)
@@ -497,7 +521,11 @@ class ExecutionAgent:
             self.alert(f"⚠️ *{strat} BLOCKED*\n`{sym}` — {appr_reason}")
             return
 
-        qty = self.risk.calculate_position_size(entry, stop)
+        qty = self.risk.calculate_position_size(
+            entry, stop,
+            regime=signal.get("regime", "NORMAL"),
+            strategy=strat
+        )
         if qty <= 0:
             return
 

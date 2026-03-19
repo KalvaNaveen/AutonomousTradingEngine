@@ -72,6 +72,7 @@ class DailyCache:
                 closes  = [d["close"]  for d in data]
                 volumes = [d["volume"] for d in data]
                 highs   = [d["high"]   for d in data]
+                lows    = [d["low"]    for d in data]
 
                 ema25    = self._ema(closes, 25)[-1]
                 rsi14    = (self._rsi(closes, 14) or [50.0])[-1]
@@ -81,6 +82,7 @@ class DailyCache:
                     [v * c / 1e7 for v, c in zip(volumes[-20:], closes[-20:])]
                 )) if len(volumes) >= 20 else 0.0
                 pivot    = self._pivot_support(data)
+                atr14    = self._atr(highs, lows, closes, 14)
 
                 # [v10] Minervini SMA computations
                 sma50  = float(np.mean(closes[-50:])) if len(closes) >= 50 else 0.0
@@ -102,8 +104,10 @@ class DailyCache:
                         "symbol":         symbol,
                         "closes":         closes,
                         "highs":          highs,
+                        "lows":           lows,
                         "volumes":        volumes,
                         "ema25":          ema25,
+                        "atr14":          round(atr14, 2),
                         "rsi14":          rsi14,
                         "bb_lower":       bb,
                         "avg_daily_vol":  avg_vol,
@@ -131,41 +135,46 @@ class DailyCache:
             # 160 tokens at 3/sec = ~55s preload. Acceptable at 8:45 AM.
             time.sleep(0.35)
 
-        # Also preload Nifty50 index history for regime + market status detection
+        # Also preload Nifty50 index and Sector Indices for regime/sector tracking
         try:
-            nd = self._fetch_daily(NIFTY50_TOKEN, days=260)
-            if len(nd) >= 30:
-                nc = [d["close"] for d in nd]
-                nv = [d["volume"] for d in nd]
-                nsma50  = float(np.mean(nc[-50:])) if len(nc) >= 50 else 0.0
-                nsma150 = float(np.mean(nc[-150:])) if len(nc) >= 150 else 0.0
-                nsma200 = float(np.mean(nc[-200:])) if len(nc) >= 200 else 0.0
-                nsma200_up = False
-                if len(nc) >= 220:
-                    nsma200_prev = float(np.mean(nc[-220:-20]))
-                    nsma200_up = nsma200 > nsma200_prev
-                with self._lock:
-                    self._data[NIFTY50_TOKEN] = {
-                        "symbol":  "NIFTY50",
-                        "closes":  nc,
-                        "volumes": nv,
-                        "ema25":   self._ema(nc, 25)[-1],
-                        "avg_daily_vol": 1.0,
-                        "avg_turnover_cr": 0.0,
-                        "bb_lower": 0.0,
-                        "rsi14":   50.0,
-                        "pivot_support": 0.0,
-                        "upper_circuit": 0.0,
-                        "lower_circuit": 0.0,
-                        "sma50":    round(nsma50, 2),
-                        "sma150":   round(nsma150, 2),
-                        "sma200":   round(nsma200, 2),
-                        "sma200_up": nsma200_up,
-                        "high_52w": round(max(nc[-260:]) if len(nc) >= 260 else max(nc), 2),
-                        "low_52w":  round(min(nc[-260:]) if len(nc) >= 260 else min(nc), 2),
-                        "rs_score": 0,
-                        "loaded_at": now_ist(),
-                    }
+            from config import SECTOR_TOKENS
+            extra_indexes = {"NIFTY50": NIFTY50_TOKEN}
+            extra_indexes.update(SECTOR_TOKENS)
+            
+            for sym, tkn in extra_indexes.items():
+                nd = self._fetch_daily(tkn, days=260)
+                if len(nd) >= 30:
+                    nc = [d["close"] for d in nd]
+                    nv = [d["volume"] for d in nd]
+                    nsma50  = float(np.mean(nc[-50:])) if len(nc) >= 50 else 0.0
+                    nsma150 = float(np.mean(nc[-150:])) if len(nc) >= 150 else 0.0
+                    nsma200 = float(np.mean(nc[-200:])) if len(nc) >= 200 else 0.0
+                    nsma200_up = False
+                    if len(nc) >= 220:
+                        nsma200_prev = float(np.mean(nc[-220:-20]))
+                        nsma200_up = nsma200 > nsma200_prev
+                    with self._lock:
+                        self._data[tkn] = {
+                            "symbol":  sym,
+                            "closes":  nc,
+                            "volumes": nv,
+                            "ema25":   self._ema(nc, 25)[-1],
+                            "avg_daily_vol": 1.0,
+                            "avg_turnover_cr": 0.0,
+                            "bb_lower": 0.0,
+                            "rsi14":   50.0,
+                            "pivot_support": 0.0,
+                            "upper_circuit": 0.0,
+                            "lower_circuit": 0.0,
+                            "sma50":    round(nsma50, 2),
+                            "sma150":   round(nsma150, 2),
+                            "sma200":   round(nsma200, 2),
+                            "sma200_up": nsma200_up,
+                            "high_52w": round(max(nc[-260:]) if len(nc) >= 260 else max(nc), 2),
+                            "low_52w":  round(min(nc[-260:]) if len(nc) >= 260 else min(nc), 2),
+                            "rs_score": 0,
+                            "loaded_at": now_ist(),
+                        }
         except Exception:
             pass
 
@@ -313,6 +322,15 @@ class DailyCache:
     def get_rs_score(self, token: int) -> int:
         with self._lock:
             return self._data.get(token, {}).get("rs_score", 0)
+    def get_atr(self, token: int, period: int = 14) -> float:
+        """[v13] Returns pre-computed ATR. Default period=14."""
+        with self._lock:
+            return self._data.get(token, {}).get("atr14", 0.0)
+
+    def get_lows(self, token: int) -> list:
+        with self._lock:
+            return list(self._data.get(token, {}).get("lows", []))
+
     def get_sector_rs(self, symbol: str) -> int:
         """
         Returns sector-level RS score for a symbol.
@@ -394,6 +412,29 @@ class DailyCache:
         m = np.mean(w)
         s = np.std(w)
         return m + sd * s, m, m - sd * s
+
+    @staticmethod
+    def _atr(highs: list, lows: list, closes: list,
+             period: int = 14) -> float:
+        """
+        [v13] Average True Range.
+        TR = max(H-L, |H-prevC|, |L-prevC|)
+        ATR = SMA of TR over `period` days.
+        """
+        if len(highs) < period + 1:
+            # Fallback: simple H-L range
+            return float(np.mean([h - l for h, l in zip(highs[-period:], lows[-period:])]))
+        trs = []
+        for i in range(1, len(highs)):
+            tr = max(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1]),
+            )
+            trs.append(tr)
+        if len(trs) < period:
+            return float(np.mean(trs)) if trs else 0.0
+        return float(np.mean(trs[-period:]))
 
     @staticmethod
     def _pivot_support(data: list) -> float:

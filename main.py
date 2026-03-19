@@ -79,6 +79,7 @@ class BNFEngine:
         self.s1_signals = []
         self.token_ok   = False
         self.scan_count = 0   # [v9] total S1+S2 scan cycles run today
+        self.s5_trade_count = 0   # [v13] S5 intraday trades taken today
         self._ws_was_fresh = True
 
     def _fetch_live_capital(self, real_kite: KiteConnect) -> float:
@@ -206,13 +207,18 @@ class BNFEngine:
             print(f"[BNFEngine] LIVE MODE — real orders, "
                   f"capital ₹{self.capital:,.0f}")
 
-        # 10 — [v10] Minervini agents
+        # 10 — [v10] Minervini agents + Phase 3 Intelligence
         self.fundamental_agent   = FundamentalAgent()
         self.stage_agent         = StageAgent(self.daily_cache)
         self.vcp_agent           = VCPAgent(self.daily_cache)
         self.market_status_agent = MarketStatusAgent(
             self.daily_cache, self.tick_store, NIFTY50_TOKEN
         )
+        
+        from sector_agent import SectorAgent
+        from earnings_agent import EarningsAgent
+        self.sector_agent        = SectorAgent(self.daily_cache, self.tick_store)
+        self.earnings_agent      = EarningsAgent()
 
         # 11 — Scanner and ExecutionAgent (with Minervini agents injected)
         self.scanner = ScannerAgent(
@@ -221,14 +227,18 @@ class BNFEngine:
             stage_agent=self.stage_agent,
             vcp_agent=self.vcp_agent,
             market_status_agent=self.market_status_agent,
+            sector_agent=self.sector_agent,  # [v13] injected
         )
         self.execution = ExecutionAgent(
             self.kite, self.risk, self.journal, self.state
         )
-        # [v11] Inject agents into execution for master_checklist()
+        # [v11/v13] Inject agents into execution for master_checklist() and Sit on Hands
         self.execution._stage_agent       = self.stage_agent
         self.execution._fundamental_agent = self.fundamental_agent
+        self.execution._sector_agent      = self.sector_agent
+        self.execution._earnings_agent    = self.earnings_agent
         self.execution._data_universe     = self.data.UNIVERSE
+        self.execution._symbol_to_sector  = getattr(self.data, 'SYMBOL_TO_SECTOR', {})
 
     # ── 8:30 AM: Auto token refresh ───────────────────────────────
 
@@ -270,7 +280,13 @@ class BNFEngine:
         if not self.daily_cache or not self.data:
             print("[Engine] preload_cache: daily_cache not ready, skipping")
             return
-        print("[Engine] Loading daily cache...")
+            
+        print("[Engine] Loading earnings calendar cache...")
+        if hasattr(self, 'earnings_agent'):
+            # Preload earnings dates (only fetches if missing or expired)
+            self.earnings_agent.preload(list(self.data.UNIVERSE.values()))
+            
+        print("[Engine] Loading daily cache (technical data)...")
         ok = self.daily_cache.preload(self.data.UNIVERSE)
         if not ok:
             print("[Engine] Daily cache load failed or partial — REST fallback active")
@@ -284,6 +300,11 @@ class BNFEngine:
 
         # Crash recovery: reload any open positions from yesterday/today
         self.execution.restore_from_state()
+
+        # [v13] Reset VWAP/ORB data for new trading day
+        if self.tick_store:
+            self.tick_store.reset_daily()
+        self.s5_trade_count = 0
 
         # Regime detection
         self.regime = self.scanner.detect_regime()
@@ -303,22 +324,24 @@ class BNFEngine:
             f"Fund: `{'✅' if fund_loaded else '⚠️'}`"
         )
 
-        # Pre-scan S1 candidates
-        if self.regime != "CHOP":
+        # [v13] Pre-scan S1 candidates — blocked in CHOP and BEAR_PANIC
+        if self.regime not in ("CHOP", "BEAR_PANIC", "EXTREME_PANIC"):
             self.s1_signals = self.scanner.scan_s1_ema_divergence(self.regime)
             print(f"[Engine] S1 scan: {len(self.s1_signals)} signals")
         else:
-            print("[Engine] CHOP regime — S1 inactive")
+            print(f"[Engine] {self.regime} regime — S1 blocked (no swing entries)")
 
-        # [v10] S3 SEPA scan (pre-market, ~9:00 AM)
-        s3_signals = self.scanner.scan_s3_sepa()
-        print(f"[Engine] S3 SEPA scan: {len(s3_signals)} signals")
-        if s3_signals:
-            # Store for execution at 9:30
-            self.state.set_kv("s3_signals", str(len(s3_signals)))
-            for sig in s3_signals[:2]:
-                if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
-                    self.execution.execute_minervini(sig)
+        # [v13] S3 SEPA scan — blocked in BEAR_PANIC
+        if self.regime not in ("BEAR_PANIC", "EXTREME_PANIC"):
+            s3_signals = self.scanner.scan_s3_sepa()
+            print(f"[Engine] S3 SEPA scan: {len(s3_signals)} signals")
+            if s3_signals:
+                self.state.set_kv("s3_signals", str(len(s3_signals)))
+                for sig in s3_signals[:2]:
+                    if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
+                        self.execution.execute_minervini(sig)
+        else:
+            print(f"[Engine] {self.regime} — S3 blocked")
 
         # [v10] Initial market status
         self._refresh_market_status()
@@ -396,9 +419,11 @@ class BNFEngine:
             if self.daily_cache and self.data:
                 self.daily_cache.refresh_circuit_limits(self.data.UNIVERSE)
 
-        # S1: Execute pre-scanned signals 9:30–10:00 AM
+        # [v13] S1: Execute pre-scanned signals 9:30–10:00 AM
+        # Blocked in CHOP, BEAR_PANIC, EXTREME_PANIC
         if (datetime.time(9, 30) <= now_t <= datetime.time(10, 0) and
-                self.s1_signals and self.regime != "CHOP"):
+                self.s1_signals and
+                self.regime not in ("CHOP", "BEAR_PANIC", "EXTREME_PANIC")):
             for sig in self.s1_signals[:2]:
                 if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
                     self.execution.execute(sig, regime=self.regime)
@@ -418,17 +443,31 @@ class BNFEngine:
                     self.execution.execute(sig, regime=self.regime)
                     break
 
-        # [v10] S4: Live leadership breakout scan (every tick)
-        if datetime.time(9, 30) <= now_t <= datetime.time(15, 0):
+        # [v13] S4: Leadership breakout — blocked in BEAR_PANIC
+        if (datetime.time(9, 30) <= now_t <= datetime.time(15, 0) and
+                self.regime not in ("BEAR_PANIC", "EXTREME_PANIC")):
             s4_signals = self.scanner.scan_s4_leadership()
             for sig in s4_signals:
                 if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
                     self.execution.execute_minervini(sig)
                     break   # One S4 entry per tick cycle
 
-        # [v10] Refresh market status every 30 minutes
+        # [v10/v13] Refresh market status and sector momentum every 30 minutes
         if now_ist().minute % 30 == 0:
             self._refresh_market_status()
+            self.sector_agent.update()
+
+        # [v13] S5: VWAP+ORB intraday scan (09:45–14:30)
+        if (datetime.time(9, 45) <= now_t <= datetime.time(14, 30) and
+                self.s5_trade_count < 3):
+            s5_signals = self.scanner.scan_s5_vwap_orb()
+            for sig in s5_signals:
+                if (len(self.execution.active_trades) < MAX_OPEN_POSITIONS
+                        and self.s5_trade_count < 3):
+                    ok = self.execution.execute(sig, regime=self.regime)
+                    if ok:
+                        self.s5_trade_count += 1
+                    break  # One S5 entry per tick cycle
 
         # Monitor open positions (Kotegawa S1/S2)
         self.execution.monitor_positions()
@@ -447,6 +486,7 @@ class BNFEngine:
         self.execution.daily_summary_alert(self.regime,
                                             total_scans=self.scan_count)
         self.scan_count = 0   # [v9] reset daily counter
+        self.s5_trade_count = 0   # [v13] reset S5 daily counter
 
         if PAPER_MODE and hasattr(self.kite, "get_paper_summary"):
             s = self.kite.get_paper_summary()
@@ -480,64 +520,28 @@ class BNFEngine:
 
     # ── Scheduler ─────────────────────────────────────────────────
 
-    def _build_period_summary_msg(self, title: str,
-                                   from_date: str, to_date: str) -> str:
-        """
-        [v9] Build a clean Markdown table summary for a date range.
-        Used by both weekly_summary() and monthly_summary().
-        """
-        if not self.journal:
-            return f"{title}\n_(journal not ready)_"
-        s = self.journal.get_period_summary(from_date, to_date)
-
-        # Top-5 symbols table
-        top5_lines = ""
-        if s["top5_symbols"]:
-            top5_lines = "\n\n*🏆 Top 5 by PnL:*\n"
-            top5_lines += "```\n"
-            top5_lines += f"{'Symbol':<12} {'PnL':>10}\n"
-            top5_lines += f"{'-'*12} {'-'*10}\n"
-            for sym, pnl in s["top5_symbols"]:
-                top5_lines += f"{sym:<12} ₹{pnl:>+,.0f}\n"
-            top5_lines += "```"
-
-        pnl_sign = "📈" if s["gross_pnl"] >= 0 else "📉"
-        return (
-            f"📅 *{title}*\n"
-            f"`{from_date}` → `{to_date}`\n\n"
-            f"```\n"
-            f"{'Trades':<18} {s['total']:>6}\n"
-            f"{'Wins / Losses':<18} {s['wins']:>3} / {s['losses']:<3}\n"
-            f"{'Win Rate':<18} {s['win_rate']:>5.1f}%\n"
-            f"{'Gross PnL':<18} ₹{s['gross_pnl']:>+,.0f}\n"
-            f"{'Best Regime':<18} {s['best_regime']:>8}\n"
-            f"{'Worst Regime':<18} {s['worst_regime']:>8}\n"
-            f"```"
-            f"\n{pnl_sign} Net: ₹`{s['gross_pnl']:+,.0f}`"
-            f"{top5_lines}"
-        )
-
     def weekly_summary(self):
         """
         [v9] Every Sunday at 16:00 IST.
-        Sends a Markdown table of the past 7 trading days to Telegram.
+        Sends an emoji-rich weekly report to Telegram.
         """
+        from report_agent import build_weekly_report
         if not self.execution:
             return
         today     = today_ist()
         from_date = (today - datetime.timedelta(days=6)).isoformat()
         to_date   = today.isoformat()
-        msg = self._build_period_summary_msg(
-            "BNF ENGINE v12 — WEEKLY SUMMARY", from_date, to_date
-        )
+        period_stats = self.journal.get_period_summary(from_date, to_date)
+        msg = build_weekly_report(period_stats, from_date, to_date, self.capital)
         self.execution.alert(msg)
         print(f"[Engine] Weekly summary sent: {from_date} → {to_date}")
 
     def monthly_summary(self):
         """
         [v9] 1st of month at 16:00 IST.
-        Sends a Markdown table of the prior calendar month to Telegram.
+        Sends an emoji-rich monthly report to Telegram.
         """
+        from report_agent import build_monthly_report
         if not self.execution:
             return
         today = today_ist()
@@ -547,9 +551,8 @@ class BNFEngine:
         last_month_start = last_month_end.replace(day=1)
         from_date = last_month_start.isoformat()
         to_date   = last_month_end.isoformat()
-        msg = self._build_period_summary_msg(
-            "BNF ENGINE v12 — MONTHLY SUMMARY", from_date, to_date
-        )
+        period_stats = self.journal.get_period_summary(from_date, to_date)
+        msg = build_monthly_report(period_stats, from_date, to_date, self.capital)
         self.execution.alert(msg)
         print(f"[Engine] Monthly summary sent: {from_date} → {to_date}")
 

@@ -42,17 +42,50 @@ class RiskAgent:
             return False, f"RR_{rr:.2f}_BELOW_1.5"
         return True, "APPROVED"
 
-    def calculate_position_size(self, entry: float, stop: float) -> int:
+    def calculate_position_size(self, entry: float, stop: float,
+                                regime: str = "NORMAL",
+                                strategy: str = "") -> int:
+        """
+        [v13] Volatility-adjusted position sizing.
+        Scales risk down in volatile regimes to protect capital.
+
+        Regime scaling:
+          BULL       → 100% of MAX_RISK_PER_TRADE_PCT
+          NORMAL     → 100%
+          VOLATILE   → 70%  (reduce exposure when VIX elevated)
+          BEAR_PANIC → 40%  (minimal exposure, only S2 should be trading)
+          EXTREME    → 30%  (survival mode)
+
+        Strategy scaling:
+          S5_VWAP_ORB (MIS) → 50% of max_position (intraday = smaller size)
+        """
+        # Regime-based risk scaling
+        regime_scale = {
+            "BULL":          1.0,
+            "NORMAL":        1.0,
+            "VOLATILE":      0.70,
+            "BEAR_PANIC":    0.40,
+            "EXTREME_PANIC": 0.30,
+            "CHOP":          0.80,
+        }.get(regime, 1.0)
+
         # Shave 0.2% from the risk budget to absorb STT (0.1% sell-side on
         # delivery), brokerage (~0.03% per leg), and typical limit-order
         # slippage (~0.05%). On a 0.8% S2 stop this is material. On a 7%
         # S1 stop it is negligible — but correct in both cases.
-        risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * 0.998
+        risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * regime_scale * 0.998
         rps     = entry - stop
         if rps <= 0:
             return 0
         shares = int(risk_rs / rps)
-        cap    = int((self.capital * MAX_POSITION_PCT) / (entry * 1.001))
+
+        # Position cap — smaller for intraday strategies
+        if strategy.startswith("S5"):
+            pos_cap = MAX_POSITION_PCT * 0.50   # 50% max for MIS intraday
+        else:
+            pos_cap = MAX_POSITION_PCT
+
+        cap = int((self.capital * pos_cap) / (entry * 1.001))
         return min(shares, cap)
 
     def register_open(self, oid: str, pos: dict):
