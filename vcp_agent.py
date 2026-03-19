@@ -141,6 +141,11 @@ class VCPAgent:
         used_low_indices = set()
 
         for h_idx, h_price in highs:
+            # Volume pre-filter: reject distribution phase
+            vol_pre_window = volumes[max(0, h_idx-10):h_idx]
+            recent_avg_vol = np.mean(volumes[-50:-10]) if len(volumes) > 50 else 1.0
+            if len(vol_pre_window) > 0 and np.mean(vol_pre_window) > recent_avg_vol * 1.2:
+                continue  # Distribution, not accumulation
             
             # [FATAL FLAW 1 REMOVED: Flawed Accumulation Rejection deleted]
             
@@ -203,23 +208,10 @@ class VCPAgent:
         return contractions
 
     def _verify_contracting_depth(self, contractions: list) -> bool:
-        """
-        Two checks:
-        1. Each depth ≤ prior × CONTRACTION_TIGHTEN (0.80)
-        2. Lows must stair-step higher (consecutive + every-other)
-        """
         for i in range(1, len(contractions)):
-            # Consecutive checks
             if (contractions[i]["depth_pct"] > contractions[i-1]["depth_pct"] * CONTRACTION_TIGHTEN or
                 contractions[i]["low_price"] < contractions[i-1]["low_price"] * 0.98):
                 return False
-
-        # Longer-term stair-step (start from i=2 to avoid negative index)
-        for i in range(2, len(contractions)):
-            if contractions[i]["low_price"] < contractions[i-2]["low_price"] * 0.97:
-                return False  # lows must keep stair-stepping higher
-
-        # [FATAL FLAW 2 FIXED: Indentation corrected]
         return True
     
     def _compute_vol_score(self, contractions: list) -> float:
