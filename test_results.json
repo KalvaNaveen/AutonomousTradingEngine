@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-03-19T09:15:56.643105",
+  "timestamp": "2026-03-19T15:36:41.390293",
   "version": "v12_Minervini",
-  "passed": 20,
-  "failed": 1,
+  "passed": 21,
+  "failed": 0,
   "total": 21,
   "results": {
     "auto_login": {
@@ -27,11 +27,11 @@
     },
     "paper_broker_ltp_cache": {
       "status": "PASS",
-      "detail": "AARTIIND: broker._ltp()=423.9 == tick_store=423.9 (cache hit confirmed)"
+      "detail": "AARTIIND: broker._ltp()=411.85 == tick_store=411.85 (cache hit confirmed)"
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_3A6918D972"
+      "detail": "Order intercepted as virtual: PAPER_A691A5DC39"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -39,15 +39,15 @@
     },
     "regime_detection_4tier": {
       "status": "PASS",
-      "detail": "NORMAL (source: tick_store)"
+      "detail": "BEAR_PANIC (source: tick_store)"
     },
     "s1_scan": {
       "status": "PASS",
-      "detail": "1 signals (source: daily_cache). Top: ['HINDPETRO']"
+      "detail": "0 signals (source: daily_cache). Top: []"
     },
     "s2_scan": {
-      "status": "FAIL",
-      "detail": "Invalid format specifier"
+      "status": "PASS",
+      "detail": "0 signals. Executed: 0. Virtual orders: 1"
     },
     "eod_time_stop": {
       "status": "PASS",
@@ -63,7 +63,7 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 70"
+      "detail": "Write confirmed. Total trades: 73"
     },
     "fundamental_agent_scrape": {
       "status": "PASS",
@@ -91,13 +91,13 @@
     }
   },
   "paper_summary": {
-    "total_orders": 3,
+    "total_orders": 2,
     "filled": 2,
     "cancelled": 0,
-    "open": 1,
-    "realised_pnl": 7964.0,
-    "available_margin": 506561.4,
-    "capital_deployed": -6561.4
+    "open": 0,
+    "realised_pnl": 7982.0,
+    "available_margin": 506597.2,
+    "capital_deployed": -6597.2
   },
   "websocket": true,
   "daily_cache": true

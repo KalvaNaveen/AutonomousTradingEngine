@@ -61,6 +61,10 @@ class FundamentalAgent:
         self._loaded = False
         self._scraper_alerted = set()
         self._init_db()
+        # Warm in-memory cache from SQLite so is_loaded() returns True
+        # on crash recovery / mid-session restart without waiting for
+        # Sunday preload(). Only loads entries within 7-day TTL.
+        self._warm_from_db()
 
     def _init_db(self):
         with sqlite3.connect(JOURNAL_DB) as conn:
@@ -73,6 +77,19 @@ class FundamentalAgent:
                 )
             """)
             conn.commit()
+
+    def _warm_from_db(self):
+        """Load fresh cached entries from SQLite into memory at startup."""
+        db = self._load_db()
+        count = 0
+        for sym, data in db.items():
+            if self._fresh(data.get("_updated_at", "")):
+                with self._lock:
+                    self._cache[sym] = data
+                count += 1
+        if count > 0:
+            self._loaded = True
+            print(f"[FundamentalAgent] Warmed {count} symbols from SQLite cache")
 
     def _slug(self, symbol: str) -> str:
         return SLUG_OVERRIDES.get(symbol, symbol)
