@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-03-20T01:25:27.067598",
+  "timestamp": "2026-03-20T08:00:25.622449",
   "version": "v12_Minervini",
-  "passed": 24,
+  "passed": 27,
   "failed": 0,
-  "total": 24,
+  "total": 27,
   "results": {
     "auto_login": {
       "status": "PASS",
-      "detail": "Token: zndyMDR4L4..."
+      "detail": "Token: zTiM1iK3nM..."
     },
     "blackout_calendar": {
       "status": "PASS",
@@ -31,7 +31,7 @@
     },
     "paper_mode_active": {
       "status": "PASS",
-      "detail": "Order intercepted as virtual: PAPER_71058D7633"
+      "detail": "Order intercepted as virtual: PAPER_BEB4FABB80"
     },
     "crash_recovery": {
       "status": "PASS",
@@ -39,7 +39,7 @@
     },
     "regime_detection_4tier": {
       "status": "PASS",
-      "detail": "BEAR_PANIC (source: tick_store)"
+      "detail": "CHOP (source: tick_store)"
     },
     "s1_scan": {
       "status": "PASS",
@@ -63,7 +63,7 @@
     },
     "journal_write": {
       "status": "PASS",
-      "detail": "Write confirmed. Total trades: 85"
+      "detail": "Write confirmed. Total trades: 91"
     },
     "fundamental_agent_scrape": {
       "status": "PASS",
@@ -97,9 +97,21 @@
       "status": "PASS",
       "detail": "0 in sample of 20 have imminent earnings."
     },
+    "macro_agent": {
+      "status": "PASS",
+      "detail": "DXY: 99.4 | US10Y: 4.28% | Bearish: False"
+    },
+    "order_flow_agent": {
+      "status": "PASS",
+      "detail": "L2 depth sampled: MILD_SELL(score=-25), MILD_SELL(score=-25), MILD_SELL(score=-25)"
+    },
+    "go_bridge": {
+      "status": "PASS",
+      "detail": "Go executor not running (optional \u2014 Python fallback active)"
+    },
     "backtest_minervini": {
       "status": "PASS",
-      "detail": "Chunked backtest complete: 0 signals, 30 chunks fetched"
+      "detail": "Chunked backtest complete: 0 signals, 29 chunks fetched"
     }
   },
   "paper_summary": {

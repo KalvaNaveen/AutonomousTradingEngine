@@ -99,135 +99,109 @@ class ScannerAgent:
 
     def scan_s1_ema_divergence(self, regime: str) -> list:
         """
-        Pre-market (9:00 AM): daily_cache for all indicator values.
-        During session: tick_store supplies current price; cache has history.
-        Loop itself makes ZERO REST calls if both cache and tick_store ready.
-
-        WebSocket fallback: if tick_store is stale, all 100 LTPs are fetched
-        in ONE batch quote call before the loop — not 100 individual calls.
-        Kite quote() accepts up to 500 symbols. 100 calls would hit the
-        10 req/sec rate limit and crash the scanner.
+        [v15] Connors RSI(4) Pullback System — replaces old EMA divergence.
+        High probability mean reversion (65-80% historic win rate).
+        Rule 1: Price > 200 SMA (Primary Uptrend)
+        Rule 2: Close < Lower Bollinger Band (20, 2) (Deep oversold)
+        Rule 3: RSI(4) < 30 (Short-term panic)
         """
-        min_dev = self.get_s1_min_deviation(regime)
+        now = now_ist().time()
+        # Scan active primarily from 10:00 to 15:15 to allow intraday dips to form
+        if not (datetime.time(10, 0) <= now <= datetime.time(15, 15)):
+            return []
+
+        if regime in ("EXTREME_PANIC", "CHOP", "BEAR_PANIC"):
+            return []
+
+        # ── MARKET TREND GATE: Only buy longs when Nifty is above its SMA50 ──
+        # During broad market crashes (e.g. Mar 4-9), individual stock filters
+        # are useless — everything falls. This is THE single filter that matters.
+        nifty_sma50 = 0.0
+        if self.data.daily_cache and self.data.daily_cache.is_loaded():
+            nifty_sma50 = self.data.daily_cache.get_sma50(NIFTY50_TOKEN)
+        nifty_ltp = 0.0
+        if self.data.tick_store and self.data.tick_store.is_ready():
+            nifty_ltp = self.data.tick_store.get_ltp_if_fresh(NIFTY50_TOKEN)
+        if nifty_ltp > 0 and nifty_sma50 > 0 and nifty_ltp < nifty_sma50:
+            return []  # Market is in downtrend — no longs
+
         signals = []
-        ts_ready    = (self.data.tick_store and
-                       self.data.tick_store.is_fresh())
+        universe = self.data.UNIVERSE
         cache_ready = self.data.daily_cache and self.data.daily_cache.is_loaded()
+        ts_ready    = self.data.tick_store and self.data.tick_store.is_ready()
 
-        # Pre-fetch all LTPs in one batch call if WebSocket is stale
-        # This avoids 100 individual get_quote() calls inside the loop
-        fallback_prices: dict = {}
+        fallback_prices = {}
         if not ts_ready:
+            tokens = [f"NSE:{s}" for s in universe.values()]
             try:
-                symbols_batch = [f"NSE:{sym}"
-                                 for sym in self.data.UNIVERSE.values()]
-                batch_quotes  = self.data.kite.quote(symbols_batch)
-                fallback_prices = {
-                    key.replace("NSE:", ""): val.get("last_price", 0.0)
-                    for key, val in batch_quotes.items()
-                }
-            except Exception as e:
-                print(f"[Scanner] Batch quote fallback failed: {e}")
-                # If batch fails, loop will skip symbols with current=0
+                q = self.data.kite.quote(tokens)
+                for k, v in q.items():
+                    fallback_prices[k.split(":")[1]] = v.get("last_price", 0.0)
+            except Exception:
+                pass
 
-        for token, symbol in self.data.UNIVERSE.items():
-            # ── Turnover filter — cache ───────────────────────────────
-            if self.data.get_avg_daily_turnover_cr(token) < S1_MIN_TURNOVER_CR:
+        for token, symbol in universe.items():
+            if self.blackout and self.blackout.is_blackout():
                 continue
 
-            # ── Circuit breaker — cache + tick LTP ───────────────────
-            if self.data.check_circuit_breaker(symbol):
-                continue
-
-            # ── Historical indicators — cache ─────────────────────────
-            if cache_ready:
-                closes  = self.data.daily_cache.get_closes(token)
-                ema_25  = self.data.daily_cache.get_ema25(token)
-                rsi     = self.data.daily_cache.get_rsi14(token)
-                bb_lo   = self.data.daily_cache.get_bb_lower(token)
-                d_cache = self.data.daily_cache.get(token)
-                volumes = d_cache.get("volumes", [])
-                if len(closes) < 30:
-                    continue
-            else:
-                # REST fallback (pre-market before cache, or cache miss)
-                hist = self.data.get_daily_ohlcv(token, days=70)
-                if len(hist) < 30:
-                    continue
-                closes  = [d["close"] for d in hist]
-                volumes = [d["volume"] for d in hist]
-                ema_25  = DataAgent.compute_ema(closes, 25)[-1]
-                rsi     = (DataAgent.compute_rsi(closes, 14) or [50])[-1]
-                _, _, bb_lo = DataAgent.compute_bollinger(closes, 20, 2.0)
-
-            # ── Current price — fresh tick first, batch REST fallback ──
-            # IMPORTANT: cached closes[-1] is yesterday's close (loaded at 8:45 AM).
-            # Do NOT use it as current price. If WebSocket is stale, prices were
-            # batch pre-fetched above in one REST call — read from dict here.
-            current = (self.data.tick_store.get_ltp_if_fresh(token)
-                       if ts_ready else 0.0)
+            current = self.data.tick_store.get_ltp_if_fresh(token) if ts_ready else 0.0
             if current <= 0:
-                # Read from pre-fetched batch dict (one REST call for all 100)
                 current = fallback_prices.get(symbol, 0.0)
             if current <= 0:
                 continue
 
-            # ── Deviation ─────────────────────────────────────────────
-            dev = (ema_25 - current) / ema_25
-            if not (min_dev <= dev <= S1_DEVIATION_MAX):
+            if not cache_ready: 
                 continue
 
-            # ── RSI ───────────────────────────────────────────────────
-            if rsi >= S1_RSI_THRESHOLD:
+            # ── 1. Primary Trend: Price > SMA200 ──
+            sma200 = self.data.daily_cache.get_sma200(token)
+            if current < sma200 or sma200 <= 0:
                 continue
 
-            # ── Bollinger ─────────────────────────────────────────────
-            if current >= bb_lo:
+            # ── 1b. Golden Cross: SMA50 > SMA200 (confirms healthy uptrend) ──
+            sma50 = self.data.daily_cache.get_sma50(token)
+            if sma50 <= sma200 or sma50 <= 0:
                 continue
 
-            # ── Volume confirmation — last 3 days vs 20-day avg ───────
-            if len(volumes) >= 20:
-                vol_ratio = (np.mean(volumes[-3:]) /
-                             max(np.mean(volumes[-20:]), 1))
-            else:
-                vol_ratio = 0.0
-            if vol_ratio < S1_VOLUME_MULTIPLIER:
+            # ── 2. Structural Oversold (Bollinger) ──
+            bb_lo = self.data.daily_cache.get_bb_lower(token)
+            if current >= bb_lo or bb_lo <= 0:
                 continue
 
-            # ── Depth — tick_store ────────────────────────────────────
-            depth = self.data.get_order_depth(token)
-            if depth and depth.get("bid_ask_ratio", 1.0) < 1.0:
+            # ── 3. Short Term Panic (RSI-4 < 25 → deeper panic only) ──
+            closes = self.data.daily_cache.get_closes(token)
+            if len(closes) < 10: 
+                continue
+                
+            live_closes = closes.copy()
+            live_closes.append(current)
+            
+            rsi_4 = (DataAgent.compute_rsi(live_closes, S1_RSI_PERIOD) or [50])[-1]
+            if rsi_4 >= 25:  # Tighter: only genuine panic
                 continue
 
-            support    = self.data.compute_pivot_support(token)
-
-            # [v13] ATR-based stop: entry - (ATR × multiplier)
-            # Replaces the old prior-close stop that gave 0.28% stops
-            atr = 0.0
-            if cache_ready:
-                atr = self.data.daily_cache.get_atr(token)
+            # ── Stops & Targets ──
+            atr = self.data.daily_cache.get_atr(token)
             if atr <= 0:
-                atr = current * 0.03   # fallback: 3% of price
-            atr_stop = current - (atr * S1_ATR_STOP_MULTIPLIER)
-            # Floor: pivot support, ceiling: hard cap at S1_HARD_STOP_PCT
-            hard_floor = current * (1 - S1_HARD_STOP_PCT)
-            stop_price = max(atr_stop, hard_floor, support * 0.98)
-            # Sanity: stop must be below entry
+                atr = current * 0.03
+                
+            atr_stop = current - (atr * 1.5)  # Tighter stop
+            hard_floor = current * (1 - 0.06)  # 6% max loss
+            stop_price = max(atr_stop, hard_floor)
+            
             if stop_price >= current * 0.995:
-                continue   # stop too tight, skip this signal
+                continue   # skip, stop too tight
 
             signals.append({
-                "strategy":       "S1_EMA_DIVERGENCE",
+                "strategy":       "S1_RSI_MEAN_REV",
                 "symbol":         symbol,
                 "token":          token,
                 "regime":         regime,
                 "entry_price":    current,
-                "partial_target": round(current + (ema_25 - current) * 0.50, 2),
-                "target_price":   round(ema_25 * 0.97, 2),
+                "partial_target": round(current + (current - stop_price), 2),
+                "target_price":   round(current + (current - stop_price) * 3, 2), # Open targets, closed by RSI reverse
                 "stop_price":     round(stop_price, 2),
-                "deviation_pct":  round(dev * 100, 2),
-                "rsi":            round(rsi, 1),
-                "rvol":           round(vol_ratio, 2),
+                "rsi_4":          round(rsi_4, 2),
                 "atr":            round(atr, 2),
                 "product":        "CNC",
                 "max_hold_days":  S1_MAX_HOLD_DAYS,
@@ -235,7 +209,192 @@ class ScannerAgent:
                 "entry_date":     None,
             })
 
-        return sorted(signals, key=lambda x: x["deviation_pct"], reverse=True)[:5]
+        # Buy the deepest panic first
+        return sorted(signals, key=lambda x: x["rsi_4"])[:5]
+
+    def scan_s6_rsi_short(self, regime: str) -> list:
+        """
+        [v15] S6: Connors RSI(4) Intraday Exhaustion Short (MIS)
+        High probability short selling in primary downtrends.
+        Rule 1: Price < 200 SMA (Primary Downtrend)
+        Rule 2: Close > Upper Bollinger Band (20, 2) OR extended
+        Rule 3: RSI(4) > 80 (Short-term exhaustion)
+        Rule 4: Intraday MIS only (Square off at 15:15 natively handled by Engine)
+        """
+        now = now_ist().time()
+        # Active only in morning/mid-day to allow intraday trend exhaustion
+        if not (datetime.time(9, 30) <= now <= datetime.time(14, 0)):
+            return []
+
+        if regime in ("BULL_MAX"): # Do not short in raging bull markets
+            return []
+
+        signals = []
+        universe = self.data.UNIVERSE
+        cache_ready = self.data.daily_cache and self.data.daily_cache.is_loaded()
+        ts_ready    = self.data.tick_store and self.data.tick_store.is_ready()
+
+        fallback_prices = {}
+        if not ts_ready:
+            tokens = [f"NSE:{s}" for s in universe.values()]
+            try:
+                q = self.data.kite.quote(tokens)
+                for k, v in q.items():
+                    fallback_prices[k.split(":")[1]] = v.get("last_price", 0.0)
+            except Exception: pass
+
+        for token, symbol in universe.items():
+            if self.blackout and self.blackout.is_blackout(): continue
+
+            current = self.data.tick_store.get_ltp_if_fresh(token) if ts_ready else 0.0
+            if current <= 0: current = fallback_prices.get(symbol, 0.0)
+            if current <= 0: continue
+            if not cache_ready: continue
+
+            # ── 1. Primary Downtrend Filter ──
+            sma200 = self.data.daily_cache.get_sma200(token)
+            if current > sma200 or sma200 <= 0:
+                continue
+
+            # ── 2. Structural Overbought ──
+            bb_hi = self.data.daily_cache.get_bb_upper(token)
+            if current <= bb_hi or bb_hi <= 0:
+                continue
+
+            # ── 3. Short Term Exhaustion (RSI-4) ──
+            closes = self.data.daily_cache.get_closes(token)
+            if len(closes) < 10: continue
+                
+            live_closes = closes.copy()
+            live_closes.append(current)
+            
+            import config
+            rsi_4 = (DataAgent.compute_rsi(live_closes, config.S1_RSI_PERIOD) or [50])[-1]
+            if rsi_4 <= 82: # Only extreme exhaustion
+                continue
+
+            # ── Stops & Targets ──
+            atr = self.data.daily_cache.get_atr(token)
+            if atr <= 0: atr = current * 0.03
+                
+            atr_stop = current + (atr * 1.2)  # Tighter stop for shorts
+            hard_ceiling = current * 1.03 # 3% hard stop (was 5%)
+            stop_price = min(atr_stop, hard_ceiling)
+            
+            if stop_price <= current * 1.002:
+                continue   # skip, stop too tight
+
+            signals.append({
+                "strategy":       "S6_RSI_SHORT",
+                "symbol":         symbol,
+                "token":          token,
+                "regime":         regime,
+                "entry_price":    current,
+                "partial_target": round(current - (stop_price - current), 2),
+                "target_price":   round(current - (stop_price - current) * 3, 2), # Trail to EOD or RSI < 40
+                "stop_price":     round(stop_price, 2),
+                "rsi_4":          round(rsi_4, 2),
+                "atr":            round(atr, 2),
+                "product":        "MIS",      # Intraday
+                "is_short":       True,       # Short Selling Flag
+                "max_hold_days":  0,
+                "entry_time":     None,
+                "entry_date":     None,
+            })
+
+        # Short the most overbought first
+        return sorted(signals, key=lambda x: x["rsi_4"], reverse=True)[:5]
+
+    def scan_s7_rsi_long(self, regime: str) -> list:
+        """
+        [v15] S7: Connors RSI(4) Intraday Exhaustion Long (MIS)
+        High probability long in primary uptrends (Normal/Bull markets).
+        Rule 1: Price > 200 SMA (Primary Uptrend)
+        Rule 2: Close < Lower Bollinger Band (20, 2) OR extended
+        Rule 3: RSI(4) < 18 (Short-term exhaustion)
+        Rule 4: Intraday MIS only
+        """
+        now = now_ist().time()
+        if not (datetime.time(9, 30) <= now <= datetime.time(14, 0)):
+            return []
+
+        if regime in ("EXTREME_PANIC", "BEAR_PANIC"): # Do not catch knives in crashes
+            return []
+
+        signals = []
+        universe = self.data.UNIVERSE
+        cache_ready = self.data.daily_cache and self.data.daily_cache.is_loaded()
+        ts_ready    = self.data.tick_store and self.data.tick_store.is_ready()
+
+        fallback_prices = {}
+        if not ts_ready:
+            tokens = [f"NSE:{s}" for s in universe.values()]
+            try:
+                q = self.data.kite.quote(tokens)
+                for k, v in q.items():
+                    fallback_prices[k.split(":")[1]] = v.get("last_price", 0.0)
+            except Exception: pass
+
+        for token, symbol in universe.items():
+            if self.blackout and self.blackout.is_blackout(): continue
+
+            current = self.data.tick_store.get_ltp_if_fresh(token) if ts_ready else 0.0
+            if current <= 0: current = fallback_prices.get(symbol, 0.0)
+            if current <= 0: continue
+            if not cache_ready: continue
+
+            # ── 1. Primary Uptrend Filter ──
+            sma200 = self.data.daily_cache.get_sma200(token)
+            if current < sma200 or sma200 <= 0:
+                continue
+
+            # ── 2. Structural Oversold ──
+            bb_lo = self.data.daily_cache.get_bb_lower(token)
+            if current >= bb_lo or bb_lo <= 0:
+                continue
+
+            # ── 3. Short Term Exhaustion (RSI-4) ──
+            closes = self.data.daily_cache.get_closes(token)
+            if len(closes) < 10: continue
+                
+            live_closes = closes.copy()
+            live_closes.append(current)
+            
+            import config
+            rsi_4 = (DataAgent.compute_rsi(live_closes, config.S1_RSI_PERIOD) or [50])[-1]
+            if rsi_4 >= 18: # Only extreme panic
+                continue
+
+            # ── Stops & Targets ──
+            atr = self.data.daily_cache.get_atr(token)
+            if atr <= 0: atr = current * 0.03
+                
+            atr_stop = current - (atr * 1.5)  # Let it breathe
+            hard_floor = current * 0.97 # 3% hard stop
+            stop_price = max(atr_stop, hard_floor)
+            
+            if stop_price >= current * 0.998:
+                continue   # skip, stop too tight
+
+            signals.append({
+                "strategy":       "S7_RSI_LONG",
+                "symbol":         symbol,
+                "token":          token,
+                "regime":         regime,
+                "entry_price":    current,
+                "partial_target": round(current + abs(current - stop_price), 2),
+                "target_price":   round(current + abs(current - stop_price) * 3, 2), # Trail to EOD
+                "stop_price":     round(stop_price, 2),
+                "rsi_4":          round(rsi_4, 2),
+                "atr":            round(atr, 2),
+                "product":        "MIS",      # Intraday
+                "max_hold_days":  0,
+                "entry_time":     None,
+                "entry_date":     None,
+            })
+
+        # Buy the deepest panic first
+        return sorted(signals, key=lambda x: x["rsi_4"])[:5]
 
     def scan_s2_overreaction(self) -> list:
         """
@@ -560,7 +719,7 @@ class ScannerAgent:
         for token, symbol in universe.items():
             try:
                 # Skip if blackout
-                if self.blackout and self.blackout.is_blackout(symbol):
+                if self.blackout and self.blackout.is_blackout():
                     continue
 
                 # Liquidity filter — only highly liquid stocks

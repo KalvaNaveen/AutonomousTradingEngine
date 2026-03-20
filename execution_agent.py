@@ -99,13 +99,22 @@ class ExecutionAgent:
 
     def execute(self, signal: dict, regime: str = "UNKNOWN") -> bool:
         signal["regime"] = regime
+
+        # ── DUPLICATE SYMBOL GUARD ─────────────────────────────────
+        # Prevents the engine from ever holding 2+ positions in the same stock.
+        # This was the root cause of the 4x HINDPETRO crash-recovery bug.
+        sym = signal.get("symbol", "")
+        for t in self.active_trades.values():
+            if t.get("symbol") == sym:
+                print(f"[Exec] REJECTED {sym}: Already holding an open position")
+                return False
+
         approved, reason = self.risk.approve_trade(signal)
         if not approved:
             print(f"[Exec] REJECTED {signal['symbol']}: {reason}")
             return False
 
         # [v13 Phase 3] "Sit on Hands" Sector Guard for Swing Trades
-        sym = signal.get("symbol", "")
         strat = signal.get("strategy", "")
         if strat in ["S1_EMA_DIVERGENCE", "S3_SEPA_VCP", "S4_LEADERSHIP"]:
             if getattr(self, '_sector_agent', None):
@@ -120,6 +129,21 @@ class ExecutionAgent:
                     print(f"[Exec] REJECTED {sym}: Earnings imminent within 5 days (Event Guard)")
                     return False
 
+            # [v14 Phase 4] Global Macro Liquidity Guard
+            if getattr(self, '_macro_agent', None):
+                if self._macro_agent.is_bearish:
+                    print(f"[Exec] REJECTED {sym}: MACRO BEARISH (DXY/US10Y high) (Liquidity Guard)")
+                    return False
+
+        # [v14 Phase 4] L2 Order Flow Guard — blocks S5 day trades into sell pressure
+        if strat == "S5_VWAP_ORB":
+            token = signal.get("token", 0)
+            if token and getattr(self, '_order_flow_agent', None):
+                if self._order_flow_agent.is_sell_pressure(token):
+                    flow = self._order_flow_agent.get_flow_label(token)
+                    print(f"[Exec] REJECTED {sym}: L2 SELL PRESSURE ({flow}) — no breakout confirmation")
+                    return False
+
         qty = self.risk.calculate_position_size(
             signal["entry_price"], signal["stop_price"],
             regime=regime,
@@ -131,21 +155,64 @@ class ExecutionAgent:
         product = (self.kite.PRODUCT_CNC if signal["product"] == "CNC"
                    else self.kite.PRODUCT_MIS)
 
-        try:
-            entry_oid = self.kite.place_order(
-                variety=self.kite.VARIETY_REGULAR,
-                exchange=self.kite.EXCHANGE_NSE,
-                tradingsymbol=signal["symbol"],
-                transaction_type=self.kite.TRANSACTION_TYPE_BUY,
-                quantity=qty,
-                product=product,
-                order_type=self.kite.ORDER_TYPE_LIMIT,
-                price=round(signal["entry_price"] * 1.002, 1),
-                validity=self.kite.VALIDITY_DAY
-            )
-        except Exception as e:
-            self.alert(f"❌ ORDER FAILED: `{signal['symbol']}`\n`{e}`")
-            return False
+        # [v14] Route through Go executor if bridge is connected, else Python fallback
+        go_bridge = getattr(self, '_go_bridge', None)
+        if go_bridge and go_bridge.is_connected():
+            try:
+                go_signal = {
+                    "action": "BUY",
+                    "symbol": signal["symbol"],
+                    "exchange": "NSE",
+                    "qty": qty,
+                    "price": round(signal["entry_price"] * 1.002, 1),
+                    "trigger_price": 0,
+                    "order_type": "LIMIT",
+                    "product": "CNC" if signal["product"] == "CNC" else "MIS",
+                    "validity": "DAY",
+                    "tag": signal.get("strategy", "BNF"),
+                }
+                result = go_bridge.send_order(go_signal)
+                if result.get("status") == "OK":
+                    entry_oid = result.get("order_id", "GO_" + signal["symbol"])
+                    latency = result.get("latency_us", 0)
+                    print(f"[Exec] ⚡ GO EXECUTOR: {signal['symbol']} order placed in {latency}μs")
+                else:
+                    raise Exception(f"Go executor error: {result.get('message')}")
+            except Exception as e:
+                # Fallback to Python if Go fails
+                print(f"[Exec] Go bridge failed ({e}), falling back to Python...")
+                try:
+                    entry_oid = self.kite.place_order(
+                        variety=self.kite.VARIETY_REGULAR,
+                        exchange=self.kite.EXCHANGE_NSE,
+                        tradingsymbol=signal["symbol"],
+                        transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                        quantity=qty,
+                        product=product,
+                        order_type=self.kite.ORDER_TYPE_LIMIT,
+                        price=round(signal["entry_price"] * 1.002, 1),
+                        validity=self.kite.VALIDITY_DAY
+                    )
+                except Exception as e2:
+                    self.alert(f"❌ ORDER FAILED: `{signal['symbol']}`\n`{e2}`")
+                    return False
+        else:
+            # Standard Python path (no Go executor running)
+            try:
+                entry_oid = self.kite.place_order(
+                    variety=self.kite.VARIETY_REGULAR,
+                    exchange=self.kite.EXCHANGE_NSE,
+                    tradingsymbol=signal["symbol"],
+                    transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                    quantity=qty,
+                    product=product,
+                    order_type=self.kite.ORDER_TYPE_LIMIT,
+                    price=round(signal["entry_price"] * 1.002, 1),
+                    validity=self.kite.VALIDITY_DAY
+                )
+            except Exception as e:
+                self.alert(f"❌ ORDER FAILED: `{signal['symbol']}`\n`{e}`")
+                return False
 
         # SL and target orders are placed ONLY after entry fill confirms.
         # Reason: placing sell orders before the buy fills creates a race.
@@ -395,6 +462,12 @@ class ExecutionAgent:
         sym  = signal.get("symbol", "")
         strat = signal.get("strategy", "")
 
+        # ── DUPLICATE SYMBOL GUARD ─────────────────────────────────
+        for t in self.active_trades.values():
+            if t.get("symbol") == sym:
+                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Already holding an open position")
+                return False, "DUPLICATE_SYMBOL"
+
         # Gate 1: Market Status must be BULL or BULL_WATCH
         mkt = self.state.get_kv("market_status", "BULL")
         if mkt in ("BEAR", "CHOP", "RALLY_ATTEMPT"):
@@ -464,6 +537,12 @@ class ExecutionAgent:
             if self._earnings_agent.is_earnings_imminent(sym, days=5):
                 self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Earnings imminent within 5 days")
                 return False, "EARNINGS_IMMINENT"
+
+        # [v14 Phase 4] Global Macro Liquidity Guard
+        if getattr(self, '_macro_agent', None):
+            if self._macro_agent.is_bearish:
+                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: MACRO BEARISH (DXY/US10Y high)")
+                return False, "MACRO_BEARISH"
 
         # Gate 9: Stop ≤ 8%
         entry = signal.get("entry_price", 0)

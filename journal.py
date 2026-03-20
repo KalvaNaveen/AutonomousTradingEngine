@@ -212,3 +212,25 @@ class Journal:
              "gross_pnl": r[3], "exit_reason": r[4]}
             for r in rows
         ]
+
+    def get_period_trades(self, from_date: str, to_date: str) -> list:
+        """
+        Returns every trade in a date range with full detail for PDF reports.
+        Columns: timestamp, symbol, strategy, entry_price, full_exit_price,
+                 gross_pnl, exit_reason
+        """
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            rows = conn.execute("""
+                SELECT timestamp, symbol, strategy, entry_price,
+                       full_exit_price, gross_pnl, exit_reason
+                FROM trades
+                WHERE date >= ? AND date <= ?
+                ORDER BY timestamp ASC
+            """, (from_date, to_date)).fetchall()
+        return [
+            {"timestamp": r[0], "symbol": r[1], "strategy": r[2],
+             "entry_price": r[3], "full_exit_price": r[4],
+             "gross_pnl": r[5], "exit_reason": r[6]}
+            for r in rows
+        ]
+

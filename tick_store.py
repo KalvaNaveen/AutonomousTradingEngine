@@ -115,6 +115,41 @@ class TickStore:
                         "bid_ask_ratio": bq / max(aq, 1),
                     }
 
+                    # [v14] Track depth history for absorption detection (last 60 snapshots)
+                    hist = s.get("_depth_history")
+                    if hist is None:
+                        s["_depth_history"] = []
+                        hist = s["_depth_history"]
+                    hist.append({"bq": bq, "aq": aq, "ratio": bq / max(aq, 1), "ltp": ltp})
+                    if len(hist) > 60:
+                        s["_depth_history"] = hist[-60:]
+
+                # [v14] Cumulative Delta: buy_vol - sell_vol (trade-by-trade)
+                # Kite FULL mode: if trade price >= ask → buyer initiated
+                #                  if trade price <= bid → seller initiated
+                if ltp > 0 and vol > 0:
+                    cd = s.get("_cum_delta", 0.0)
+                    best_ask = 0.0
+                    best_bid = 0.0
+                    if s.get("depth", {}).get("asks"):
+                        best_ask = s["depth"]["asks"][0].get("price", 0)
+                    if s.get("depth", {}).get("bids"):
+                        best_bid = s["depth"]["bids"][0].get("price", 0)
+
+                    if best_ask > 0 and ltp >= best_ask:
+                        cd += vol       # Buyer aggressor (lifting the ask)
+                    elif best_bid > 0 and ltp <= best_bid:
+                        cd -= vol       # Seller aggressor (hitting the bid)
+                    s["_cum_delta"] = cd
+
+                    # [v14] Large order detection — flag blocks > 5x avg trade size
+                    avg_size = s.get("_avg_trade_size", vol)
+                    trade_count = s.get("_trade_count", 0) + 1
+                    avg_size = avg_size + (vol - avg_size) / trade_count  # running average
+                    s["_avg_trade_size"] = avg_size
+                    s["_trade_count"] = trade_count
+                    s["_last_large_order"] = vol > (avg_size * 5) if avg_size > 0 else False
+
                 # [v13] VWAP update — incremental on every tick
                 if ltp > 0 and vol > 0:
                     v = self._vwap[token]

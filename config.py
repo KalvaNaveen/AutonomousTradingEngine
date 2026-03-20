@@ -88,74 +88,78 @@ VIX_BULL_MAX        = 18.0
 # Engine still monitors and exits open positions — it only blocks new entries.
 VIX_EXTREME_STOP    = 30.0
 
-# ── Strategy 1: EMA Divergence (CNC swing) ───────────────────
-S1_EMA_PERIOD           = 25
+# ── STRATEGY CONFIGURATIONS ────────────────────────────────────
+
+# S1: Connors RSI Mean Reversion (Swing Long)
+S1_RSI_PERIOD           = 4
+S1_RSI_OVERSOLD         = 30
+S1_RSI_OVERBOUGHT       = 55
+S1_BOLLINGER_PERIOD     = 20
+S1_BOLLINGER_STD        = 2.0
+S1_ATR_PERIOD           = 14
+S1_ATR_STOP_MULTIPLIER  = 2.0     # Wider stop to let reversion breathe
+S1_HARD_STOP_PCT        = 0.10    # 10% hard cap stop
+S1_MAX_HOLD_DAYS        = 5
+S1_MIN_TURNOVER_CR      = 100
+# Legacy — still referenced by get_s1_min_deviation()
 S1_DEVIATION_MIN        = 0.12
 S1_DEVIATION_NORMAL     = 0.15
 S1_DEVIATION_BULL       = 0.20
 S1_DEVIATION_MAX        = 0.35
-S1_RSI_THRESHOLD        = 38
+S1_RSI_THRESHOLD        = 35
 S1_VOLUME_MULTIPLIER    = 1.5
-S1_ATR_PERIOD           = 14
-S1_ATR_STOP_MULTIPLIER  = 2.0     # stop = entry - (ATR_14 × 2.0)
-S1_HARD_STOP_PCT        = 0.10    # absolute max stop (safety cap: 10%)
-S1_MAX_HOLD_DAYS        = 3
-S1_MIN_TURNOVER_CR      = 100
+S1_EMA_PERIOD           = 25
 
-# ── Strategy 2: Overreaction Bounce (MIS intraday) ───────────
-S2_DROP_MIN             = 0.03
-S2_DROP_MAX             = 0.10
-S2_RVOL_MIN             = 1.8
-S2_PARTIAL_TARGET_1     = 0.012
-S2_PARTIAL_TARGET_2     = 0.020
-S2_HARD_STOP_PCT        = 0.008
-S2_TIME_STOP_MINUTES    = 45
+# S2: Overreaction (Intraday Reversal)
+S2_DROP_MIN             = 0.04    # Down from 3% to 4% for "true" panic
+S2_DROP_MAX             = 0.12 
+S2_RVOL_MIN             = 2.0     # Require 200% opening volume
+S2_PARTIAL_TARGET_1     = 0.010   # Take half at +1% (forces high win rate)
+S2_PARTIAL_TARGET_2     = 0.015   # Final exit at +1.5%
+S2_HARD_STOP_PCT        = 0.006   # Strict -0.6% stop loss
+S2_TIME_STOP_MINUTES    = 30      # Out in 30 mins if stalling
 S2_MIN_TURNOVER_CR      = 250
 
-# ── Strategy 3: SEPA + VCP Swing (CNC multi-week, Minervini) ────
-# Sourced strictly from: Trade Like a Stock Market Wizard (2013),
-# Think & Trade Like a Champion (2017), Mindset Secrets for Winning (2019).
-S3_MIN_EPS_GROWTH        = 25.0   # % quarterly YoY (prefer 40–100%)
-S3_MIN_SALES_GROWTH      = 20.0   # % quarterly YoY
-S3_MIN_ROE               = 17.0   # % annual
-S3_MAX_DEBT_EQUITY       = 0.5    # ratio (<50%)
-S3_MIN_RS_SCORE          = 70     # 1–99 custom RS rank (≥70 = top 30%)
-S3_MIN_TURNOVER_CR       = 25     # Lowers the floor to catch quiet VCP bases in mid-caps
-S3_MAX_STOP_PCT          = 0.08   # 8% max stop (Minervini hard rule)
-S3_PARTIAL_EXIT_PCT      = 0.22   # 1/3 partial at +22% if < 3 weeks
-S3_TARGET_SWING_PCT      = 0.40   # Trail overrides; placeholder R:R
-S3_MAX_HOLD_DAYS         = 90     # 3-month swing max
-S3_VCP_MIN_CONTRACTIONS  = 2      # Minimum VCP pullback count
+# S3: SEPA / VCP (Mid/Small Cap Fundamentals + Tech)
+S3_MIN_EPS_GROWTH        = 25.0
+S3_MIN_SALES_GROWTH      = 20.0
+S3_MIN_ROE               = 17.0
+S3_MAX_DEBT_EQUITY       = 0.5
+S3_MIN_RS_SCORE          = 75     # Top 25% performers
+S3_MIN_TURNOVER_CR       = 25
+S3_MAX_STOP_PCT          = 0.06   # Tighter 6% max stop
+S3_PARTIAL_EXIT_PCT      = 0.12   # Secure 1/2 profit at +12%
+S3_TARGET_SWING_PCT      = 0.20   # Cap at +20%
+S3_MAX_HOLD_DAYS         = 90     
+S3_VCP_MIN_CONTRACTIONS  = 2
 S3_VCP_MAX_CONTRACTIONS  = 6
-S3_BREAKEVEN_MOVE_PCT    = 0.12   # Move stop to breakeven after +12%
-S3_PYRAMID_ADD_PCT       = 0.12   # Pyramid trigger: +12% from entry
-S3_STALL_WEEKS           = 3      # No-progress exit: 3 weeks
+S3_BREAKEVEN_MOVE_PCT    = 0.08   # Move stop to breakeven after +8%
+S3_PYRAMID_ADD_PCT       = 0.10
+S3_STALL_WEEKS           = 2      # Dump non-performers faster
 
-# ── Strategy 4: Leadership Breakout (CNC momentum, Minervini) ────
-S4_MIN_RS_SCORE          = 80     # Top 20% performers
-S4_BREAKOUT_VOL_MIN      = 1.5    # ≥150% of average volume
-S4_MAX_BELOW_52W_HIGH    = 0.05   # Within 5% of 52-week high
-S4_MAX_STOP_PCT          = 0.08   # 8% max
-S4_PARTIAL_EXIT_PCT      = 0.20   # Partial at +20%
-S4_MAX_HOLD_DAYS         = 60     # 2-month max
-S4_MIN_TURNOVER_CR       = 100    # Momentum breakouts need moderate liquidity
-S4_BREAKEVEN_MOVE_PCT    = 0.10   # Breakeven after +10%
-S4_STALL_WEEKS           = 3
-S4_TARGET_SWING_PCT      = 0.40   # 40% swing target for S4 leadership breakouts
+# S4: Leadership Breakout (Large Cap Momentum)
+S4_MIN_RS_SCORE          = 85     # Top 15% only
+S4_BREAKOUT_VOL_MIN      = 1.8    # 180% volume surge required
+S4_MAX_BELOW_52W_HIGH    = 0.05
+S4_MAX_STOP_PCT          = 0.06   # 6% max
+S4_PARTIAL_EXIT_PCT      = 0.10   # Bag half the profit at +10%
+S4_MAX_HOLD_DAYS         = 60
+S4_MIN_TURNOVER_CR       = 100
+S4_BREAKEVEN_MOVE_PCT    = 0.06   # Move to B/E instantly at +6% (Boosts Win Rate)
+S4_STALL_WEEKS           = 2
+S4_TARGET_SWING_PCT      = 0.20   # Cap expectations at +20%
 
-# ── Strategy 5: VWAP + ORB Intraday (MIS, v13) ──────────────────────
-# Professional day-trading backbone: Opening Range Breakout confirmed by VWAP.
-# Runs 09:45–14:30, auto-exits by 15:00.
-S5_ORB_PERIOD_MINUTES    = 15      # opening range = first 15 min (09:15–09:30)
-S5_MIN_ORB_PCT           = 0.005   # min 0.5% ORB range (skip tiny-range days)
-S5_MAX_ORB_PCT           = 0.03    # max 3% ORB range (skip gap/volatile days)
-S5_VWAP_PROXIMITY_PCT    = 0.005   # entry within 0.5% of VWAP (confirmation)
-S5_ATR_STOP_MULTIPLIER   = 1.5     # stop = 1.5× ATR below entry
-S5_TARGET_RR             = 2.0     # target = 2× risk distance from entry
-S5_MIN_TURNOVER_CR       = 500     # only highly liquid stocks
-S5_MIN_RVOL              = 1.3     # minimum Relative Volume for entry
-S5_MAX_TRADES_PER_DAY    = 3       # discipline cap
-S5_HARD_STOP_PCT         = 0.015   # absolute max stop 1.5% (intraday safety)
+# S5: Open Range Breakout (Intraday Momentum)
+S5_ORB_PERIOD_MINUTES    = 15
+S5_MIN_ORB_PCT           = 0.005
+S5_MAX_ORB_PCT           = 0.025   # Slightly tighter upper bounds
+S5_VWAP_PROXIMITY_PCT    = 0.004   # Must be very close to VWAP (0.4%)
+S5_ATR_STOP_MULTIPLIER   = 1.0     # 1 ATR max stop
+S5_TARGET_RR             = 1.5     # 1:1.5 RR for higher hit rate
+S5_MIN_TURNOVER_CR       = 500
+S5_MIN_RVOL              = 1.5     # Require more volume
+S5_MAX_TRADES_PER_DAY    = 3
+S5_HARD_STOP_PCT         = 0.010   # 1.0% absolute max stop
 
 # ── Superperformance Stock Profile (Minervini PDF page 13) ──────────
 # NSE India mid-cap equivalent: ₹300 Cr – ₹5,000 Cr market cap.

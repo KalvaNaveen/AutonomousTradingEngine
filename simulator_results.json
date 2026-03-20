@@ -1,0 +1,59 @@
+{
+  "period_days": 150,
+  "symbols": 50,
+  "signals": 37,
+  "trades_executed": 3,
+  "trades_closed": 3,
+  "starting_capital": 500000.0,
+  "ending_capital": 497221.48,
+  "total_pnl": -2778.52,
+  "return_pct": -0.56,
+  "win_rate": 33.3,
+  "avg_win": 123.48,
+  "avg_loss": -1451.0,
+  "reward_risk": 0.09,
+  "sharpe_ratio": -3.11,
+  "max_drawdown_pct": 0.56,
+  "strategy_breakdown": {
+    "S3_SEPA_VCP": {
+      "count": 3,
+      "pnl": -2778.52,
+      "win_rate": 33.3
+    }
+  },
+  "all_trades": [
+    {
+      "symbol": "BAJFINANCE",
+      "strategy": "S3_SEPA_VCP",
+      "entry_price": 981.7,
+      "exit_price": 983.17,
+      "qty": 84,
+      "pnl": 123.48,
+      "entry_date": "2026-02-06",
+      "exit_date": "2026-03-02",
+      "exit_reason": "STOP_LOSS"
+    },
+    {
+      "symbol": "NAM-INDIA",
+      "strategy": "S3_SEPA_VCP",
+      "entry_price": 919.8,
+      "exit_price": 896.94,
+      "qty": 90,
+      "pnl": -2057.4,
+      "entry_date": "2026-02-06",
+      "exit_date": "2026-03-02",
+      "exit_reason": "STOP_LOSS"
+    },
+    {
+      "symbol": "ASHOKLEY",
+      "strategy": "S3_SEPA_VCP",
+      "entry_price": 201.84,
+      "exit_price": 199.79,
+      "qty": 412,
+      "pnl": -844.6,
+      "entry_date": "2026-02-06",
+      "exit_date": "2026-03-04",
+      "exit_reason": "STOP_LOSS"
+    }
+  ]
+}

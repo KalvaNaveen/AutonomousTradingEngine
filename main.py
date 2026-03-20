@@ -217,8 +217,12 @@ class BNFEngine:
         
         from sector_agent import SectorAgent
         from earnings_agent import EarningsAgent
+        from macro_agent import MacroAgent
+        from order_flow_agent import OrderFlowAgent
         self.sector_agent        = SectorAgent(self.daily_cache, self.tick_store)
         self.earnings_agent      = EarningsAgent()
+        self.macro_agent         = MacroAgent()
+        self.order_flow_agent    = OrderFlowAgent(self.tick_store)
 
         # 11 — Scanner and ExecutionAgent (with Minervini agents injected)
         self.scanner = ScannerAgent(
@@ -232,13 +236,27 @@ class BNFEngine:
         self.execution = ExecutionAgent(
             self.kite, self.risk, self.journal, self.state
         )
-        # [v11/v13] Inject agents into execution for master_checklist() and Sit on Hands
+        # [v11/v13/v14] Inject agents into execution for master_checklist() and guards
         self.execution._stage_agent       = self.stage_agent
         self.execution._fundamental_agent = self.fundamental_agent
         self.execution._sector_agent      = self.sector_agent
         self.execution._earnings_agent    = self.earnings_agent
+        self.execution._macro_agent       = self.macro_agent
+        self.execution._order_flow_agent  = self.order_flow_agent
         self.execution._data_universe     = self.data.UNIVERSE
         self.execution._symbol_to_sector  = getattr(self.data, 'SYMBOL_TO_SECTOR', {})
+
+        # [v14] Go Trade Executor bridge — optional, falls back to Python if not running
+        try:
+            from go_bridge import GoBridge
+            self.go_bridge = GoBridge()
+            if self.go_bridge.connect():
+                self.execution._go_bridge = self.go_bridge
+                print("[BNFEngine] ⚡ Go executor connected — ultra-low latency mode")
+            else:
+                print("[BNFEngine] Go executor not running — using Python order routing")
+        except Exception as e:
+            print(f"[BNFEngine] Go bridge init skipped: {e}")
 
     # ── 8:30 AM: Auto token refresh ───────────────────────────────
 
@@ -285,6 +303,9 @@ class BNFEngine:
         if hasattr(self, 'earnings_agent'):
             # Preload earnings dates (only fetches if missing or expired)
             self.earnings_agent.preload(list(self.data.UNIVERSE.values()))
+
+        if hasattr(self, 'macro_agent'):
+            self.macro_agent.preload()
             
         print("[Engine] Loading daily cache (technical data)...")
         ok = self.daily_cache.preload(self.data.UNIVERSE)
@@ -467,9 +488,20 @@ class BNFEngine:
                     ok = self.execution.execute(sig, regime=self.regime)
                     if ok:
                         self.s5_trade_count += 1
-                    break  # One S5 entry per tick cycle
+        # [v15] S6/S7: RSI Intraday Scans
+        s6_signals = self.scanner.scan_s6_rsi_short(self.regime)
+        for sig in s6_signals:
+            if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
+                self.execution.execute(sig, regime=self.regime)
+                break
 
-        # Monitor open positions (Kotegawa S1/S2)
+        s7_signals = self.scanner.scan_s7_rsi_long(self.regime)
+        for sig in s7_signals:
+            if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
+                self.execution.execute(sig, regime=self.regime)
+                break
+
+        # Monitor open positions (Kotegawa S1/S2/S5/S6/S7)
         self.execution.monitor_positions()
 
         # [v10] Monitor Minervini S3/S4 positions
@@ -522,8 +554,8 @@ class BNFEngine:
 
     def weekly_summary(self):
         """
-        [v9] Every Sunday at 16:00 IST.
-        Sends an emoji-rich weekly report to Telegram.
+        [v15] Every Sunday at 16:00 IST.
+        Sends a professional PDF weekly report to Telegram.
         """
         from report_agent import build_weekly_report
         if not self.execution:
@@ -532,14 +564,19 @@ class BNFEngine:
         from_date = (today - datetime.timedelta(days=6)).isoformat()
         to_date   = today.isoformat()
         period_stats = self.journal.get_period_summary(from_date, to_date)
-        msg = build_weekly_report(period_stats, from_date, to_date, self.capital)
-        self.execution.alert(msg)
+        trades = self.journal.get_period_trades(from_date, to_date)
+        msg = build_weekly_report(period_stats, from_date, to_date,
+                                   self.capital, trades=trades)
+        # build_weekly_report handles PDF + Telegram internally
+        # Fallback: if no trades, it returns text-only which we alert
+        if not trades:
+            self.execution.alert(msg)
         print(f"[Engine] Weekly summary sent: {from_date} → {to_date}")
 
     def monthly_summary(self):
         """
-        [v9] 1st of month at 16:00 IST.
-        Sends an emoji-rich monthly report to Telegram.
+        [v15] 1st of month at 16:00 IST.
+        Sends a professional PDF monthly report to Telegram.
         """
         from report_agent import build_monthly_report
         if not self.execution:
@@ -552,8 +589,11 @@ class BNFEngine:
         from_date = last_month_start.isoformat()
         to_date   = last_month_end.isoformat()
         period_stats = self.journal.get_period_summary(from_date, to_date)
-        msg = build_monthly_report(period_stats, from_date, to_date, self.capital)
-        self.execution.alert(msg)
+        trades = self.journal.get_period_trades(from_date, to_date)
+        msg = build_monthly_report(period_stats, from_date, to_date,
+                                    self.capital, trades=trades)
+        if not trades:
+            self.execution.alert(msg)
         print(f"[Engine] Monthly summary sent: {from_date} → {to_date}")
 
     # [v10] Market status refresh
