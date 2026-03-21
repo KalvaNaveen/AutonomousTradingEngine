@@ -69,7 +69,21 @@ class MultiTimeframeSimulator:
         
         # Real Kite Auth
         self.kite = KiteConnect(api_key=KITE_API_KEY)
-        self.kite.set_access_token(os.getenv("KITE_ACCESS_TOKEN"))
+        access_token = os.getenv("KITE_ACCESS_TOKEN")
+        self.kite.set_access_token(access_token)
+        
+        try:
+            self.kite.profile()
+        except Exception:
+            print("[Simulator] Token expired or missing. Running AutoLogin via Playwright...")
+            try:
+                from auto_login import AutoLogin
+                access_token = AutoLogin().login()
+                self.kite.set_access_token(access_token)
+                print("[Simulator] AutoLogin successful.")
+            except Exception as e:
+                print(f"[Simulator] FATAL: AutoLogin failed: {e}")
+                sys.exit(1)
         
         # Real Agents
         self.live_data = DataAgent(self.kite)
