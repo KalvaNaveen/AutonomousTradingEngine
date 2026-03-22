@@ -201,15 +201,16 @@ class Journal:
         d = date_str or today_ist().isoformat()
         with sqlite3.connect(JOURNAL_DB) as conn:
             rows = conn.execute("""
-                SELECT symbol, entry_price, full_exit_price,
-                       gross_pnl, exit_reason
+                SELECT symbol, strategy, entry_price, full_exit_price,
+                       gross_pnl, exit_reason, qty
                 FROM trades
                 WHERE date = ?
                 ORDER BY timestamp ASC
             """, (d,)).fetchall()
         return [
-            {"symbol": r[0], "entry_price": r[1], "full_exit_price": r[2],
-             "gross_pnl": r[3], "exit_reason": r[4]}
+            {"symbol": r[0], "strategy": r[1], "entry_price": r[2],
+             "full_exit_price": r[3], "gross_pnl": r[4], "exit_reason": r[5],
+             "qty": r[6]}
             for r in rows
         ]
 
@@ -222,7 +223,7 @@ class Journal:
         with sqlite3.connect(JOURNAL_DB) as conn:
             rows = conn.execute("""
                 SELECT timestamp, symbol, strategy, entry_price,
-                       full_exit_price, gross_pnl, exit_reason
+                       full_exit_price, gross_pnl, exit_reason, qty
                 FROM trades
                 WHERE date >= ? AND date <= ?
                 ORDER BY timestamp ASC
@@ -230,7 +231,7 @@ class Journal:
         return [
             {"timestamp": r[0], "symbol": r[1], "strategy": r[2],
              "entry_price": r[3], "full_exit_price": r[4],
-             "gross_pnl": r[5], "exit_reason": r[6]}
+             "gross_pnl": r[5], "exit_reason": r[6], "qty": r[7]}
             for r in rows
         ]
 

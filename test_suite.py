@@ -308,7 +308,7 @@ class EngineTestSuite:
             market_status_agent=self.market_status_agent,
             sector_agent=self.sector_agent,
         )
-        print("  Engine stack ready (v14 with Institutional Layer).\n")
+        print("  Engine stack ready (V16 with Institutional Layer).\n")
 
     # ── Test 3 [NEW v6]: websocket_connected ──────────────────────────
 

@@ -1,5 +1,6 @@
 import datetime
 import io
+import urllib.request
 import requests  # type: ignore
 import numpy as np
 import pandas as pd
@@ -22,12 +23,40 @@ class DataAgent:
         self.kite        = kite
         self.tick_store  = tick_store   # TickStore — live WebSocket feed
         self.daily_cache = daily_cache  # DailyCache — pre-market REST batch
+        self._sync_nse_universe()      # Auto-update Nifty 250 from NSE
         self.load_universe()
+
+    # ── Dynamic Nifty LargeMidcap 250 Sync ───────────────────────
+    def _sync_nse_universe(self):
+        """
+        Downloads the latest Nifty LargeMidcap 250 constituents CSV from
+        NSE archives and overwrites `nifty250.csv` locally.  Falls back
+        silently to the existing file if NSE is unreachable.
+        """
+        import os
+        url = "https://archives.nseindia.com/content/indices/ind_niftylargemidcap250list.csv"
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        csv_path = os.path.join(base_dir, "nifty250.csv")
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "text/csv",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+            if len(data) > 500:  # Sanity check: valid CSV is always > 500 bytes
+                with open(csv_path, "wb") as f:
+                    f.write(data)
+                print(f"[DataAgent] Nifty 250 universe synced from NSE ({len(data)} bytes)")
+            else:
+                print("[DataAgent] NSE response too small, keeping existing nifty250.csv")
+        except Exception as e:
+            print(f"[DataAgent] NSE sync failed ({e}), using local nifty250.csv fallback")
 
     def load_universe(self, alert_fn=None):
         """
-        Loads NSE EQ instruments and filters them dynamically exactly to the
-        Nifty 500 constituents extracted from a local CSV file ('nifty500.csv').
+        Loads NSE EQ instruments and filters them dynamically to the
+        Nifty LargeMidcap 250 constituents from a local CSV ('nifty250.csv').
         """
         import os
         try:
@@ -38,7 +67,7 @@ class DataAgent:
             
             target_list = []
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            csv_path = os.path.join(base_dir, "nifty500.csv")
+            csv_path = os.path.join(base_dir, "nifty250.csv")
             
             if os.path.exists(csv_path):
                 nifty_df = pd.read_csv(csv_path)

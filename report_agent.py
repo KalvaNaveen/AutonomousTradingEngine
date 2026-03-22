@@ -218,8 +218,9 @@ def build_daily_report(
             exit_px = t.get("full_exit_price", 0)
             t_pnl = t.get("gross_pnl", 0)
             reason = t.get("exit_reason", "")
+            qty = t.get("qty", 0)
             lines.append(
-                f"{icon} `{sym}` | {strat}\n"
+                f"{icon} `{sym}` | {strat} | Qty: {qty}\n"
                 f"    ₹{entry_px:,.1f} → ₹{exit_px:,.1f} | {_fmt(t_pnl)} ({reason})"
             )
 
@@ -313,9 +314,9 @@ class _ReportPDF(FPDF):
     def trade_table_header(self):
         self.set_font("Helvetica", "B", 7)
         self.set_fill_color(220, 220, 220)
-        cols = [("#", 6), ("DateTime", 28), ("Strategy", 28), ("Symbol", 20),
-                ("Entry", 18), ("Exit", 18), ("PnL", 20), ("Status", 12),
-                ("Reason", 24)]
+        cols = [("#", 6), ("DateTime", 26), ("Strategy", 26), ("Symbol", 18),
+                ("Qty", 10), ("Entry", 16), ("Exit", 16), ("PnL", 18),
+                ("Status", 12), ("Reason", 22)]
         for label, w in cols:
             self.cell(w, 5, label, border=1, fill=True, align="C")
         self.ln()
@@ -339,17 +340,19 @@ class _ReportPDF(FPDF):
         strategy = t.get("strategy", "")[:18]
         symbol = t.get("symbol", "")[:12]
         reason = t.get("reason", t.get("exit_reason", ""))[:16]
+        qty = str(t.get("qty", 0))
 
         cols = [
             (str(idx), 6),
-            (exit_t, 28),
-            (strategy, 28),
-            (symbol, 20),
-            (f"{entry_p:,.1f}", 18),
-            (f"{exit_p:,.1f}", 18),
-            (f"{pnl:+,.0f}", 20),
+            (exit_t, 26),
+            (strategy, 26),
+            (symbol, 18),
+            (qty, 10),
+            (f"{entry_p:,.1f}", 16),
+            (f"{exit_p:,.1f}", 16),
+            (f"{pnl:+,.0f}", 18),
             (status, 12),
-            (reason, 24),
+            (reason, 22),
         ]
         for val, w in cols:
             self.cell(w, 5, val, border=1, fill=True, align="C")

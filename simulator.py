@@ -1,10 +1,11 @@
 """
-simulator.py — BNF Engine V14 Full Comprehensive Master Simulator
+simulator.py — BNF Engine V16 Full Comprehensive Master Simulator
 
 Strictly built to exactly mirror live production.
 - Uses 100% original ScannerAgent & RiskAgent without modifications.
 - Fetches real daily AND 1-minute historical data from Kite API.
-- Fully supports all strategies: S1, S2, S3, S4, S5.
+- Rolling 5-year local cache in data/master/ with daily append-and-prune.
+- Fully supports all strategies: S1, S2, S3, S4, S5, S6, S7.
 - Provides Telegram reporting and JSON trade logs.
 
 USAGE:
@@ -112,59 +113,167 @@ class MultiTimeframeSimulator:
         self.daily_pnl = []
         self.consecutive_losses = 0
 
-    # ── 1. Data Fetching Phase ────────────────────────────────
-    def fetch_all_data(self):
-        end = today_ist()
-        # Increased to 500 calendar days to guarantee at least 260 actual trading days (accounting for weekends/holidays)
-        # This fixes the bug where len(closes) was < 252, causing all RS scores to be 0
-        start_daily = end - datetime.timedelta(days=self.days_back + 500)
-        start_min = end - datetime.timedelta(days=self.days_back + 5)     # Intraday
-        
-        print(f"\n[Simulator] Fetching {len(self.universe)} symbols × {self.days_back} days...")
-        print("[Simulator] Phase 1/2: Dialing Kite API for Daily data (S1/S3/S4)...")
-        
+    # ── Cache Helpers ──────────────────────────────────────────
+    CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "master")
+    MAX_CACHE_DAYS = 1825  # 5 years of calendar days
+
+    def _cache_path(self, prefix: str, token: int) -> str:
+        return os.path.join(self.CACHE_DIR, f"{prefix}_{token}.json")
+
+    def _load_cache(self, path: str) -> list:
+        """Load a JSON cache file.  Returns [] on any failure."""
+        if not os.path.exists(path):
+            return []
         try:
-            self.nifty_hist = self.kite.historical_data(NIFTY50_TOKEN, start_daily, end, "day")
-            self.vix_hist = self.kite.historical_data(INDIA_VIX_TOKEN, start_daily, end, "day")
-            self.hist_daily[NIFTY50_TOKEN] = self.nifty_hist  # CRITICAL: Allow MockCache to see Nifty
-            self.hist_daily[INDIA_VIX_TOKEN] = self.vix_hist
-        except Exception as e:
-            print(f"[Simulator] Failed to fetch Nifty/VIX: {e}")
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def _save_cache(self, path: str, data):
+        """Write data (list or dict) to a JSON cache file."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, default=str)
+
+    @staticmethod
+    def _bar_date(bar) -> str:
+        """Extract YYYY-MM-DD string from a Kite bar dict."""
+        d = bar.get("date", "")
+        return str(d.date()) if hasattr(d, "date") else str(d)[:10]
+
+    def _prune_old(self, bars: list, ref_date) -> list:
+        """Remove bars older than MAX_CACHE_DAYS from ref_date."""
+        cutoff = ref_date - datetime.timedelta(days=self.MAX_CACHE_DAYS)
+        cutoff_str = str(cutoff)
+        return [b for b in bars if self._bar_date(b) >= cutoff_str]
+
+    # ── 1. Data Fetching Phase (with rolling 5-year cache) ────
+    def fetch_all_data(self):
+        os.makedirs(self.CACHE_DIR, exist_ok=True)
+        end = today_ist()
+        # Kite API allows max ~2000 calendar days for daily data.
+        # MAX_CACHE_DAYS = 1825 (5 years) is safely within that limit.
+        full_start_daily = end - datetime.timedelta(days=self.MAX_CACHE_DAYS)
+
+        all_tokens = list(self.universe.keys()) + [NIFTY50_TOKEN, INDIA_VIX_TOKEN]
+
+        # ── Phase 1/2: Daily bars ─────────────────────────────
+        print(f"\n[Simulator] Fetching {len(self.universe)} symbols × {self.days_back} days...")
+        print("[Simulator] Phase 1/2: Daily data (cache → API delta)...")
 
         count = 0
-        for token in self.universe:
-            try:
-                self.hist_daily[token] = self.kite.historical_data(token, start_daily, end, "day")
-                count += 1
-            except:
-                pass
-            time.sleep(0.35)
+        for token in all_tokens:
+            cache_file = self._cache_path("daily", token)
+            cached = self._load_cache(cache_file)
 
-        print(f"[Simulator] Phase 2/2: Dialing Kite API for 1-Minute data (S2/S5)...")
+            if cached:
+                last_date_str = self._bar_date(cached[-1])
+                delta_start = datetime.date.fromisoformat(last_date_str) + datetime.timedelta(days=1)
+                if delta_start > end:
+                    # Cache is already up-to-date
+                    self.hist_daily[token] = cached
+                    count += 1
+                    continue
+                # Fetch only the missing delta
+                try:
+                    new_bars = self.kite.historical_data(token, delta_start, end, "day")
+                    cached.extend(new_bars)
+                except Exception as e:
+                    print(f"[Simulator] Daily delta fetch failed for token {token}: {e}")
+                time.sleep(0.35)
+            else:
+                # Full initial download
+                try:
+                    cached = self.kite.historical_data(token, full_start_daily, end, "day")
+                except Exception as e:
+                    print(f"[Simulator] Daily full fetch failed for token {token}: {e}")
+                    cached = []
+                time.sleep(0.35)
+
+            # Prune older than 5 years and save
+            cached = self._prune_old(cached, end)
+            self._save_cache(cache_file, cached)
+            self.hist_daily[token] = cached
+            if cached:
+                count += 1
+
+        # Assign convenience refs
+        self.nifty_hist = self.hist_daily.get(NIFTY50_TOKEN, [])
+        self.vix_hist   = self.hist_daily.get(INDIA_VIX_TOKEN, [])
+
+        # ── Phase 2/2: Minute bars ────────────────────────────
+        # Ensure minute data always covers the full simulation window
+        required_start_min = end - datetime.timedelta(days=self.days_back + 5)
+        print(f"[Simulator] Phase 2/2: 1-Minute data (cache → API delta)...")
+        print(f"[Simulator] Minute data required from: {required_start_min}")
         min_count = 0
         for token in self.universe:
+            cache_file = self._cache_path("minute", token)
+            cached_min = self._load_cache(cache_file)  # flat list of minute bars
+
+            if cached_min:
+                # Check if cache covers far enough back
+                first_date_str = self._bar_date(cached_min[0])
+                last_date_str = self._bar_date(cached_min[-1])
+                first_date = datetime.date.fromisoformat(first_date_str)
+                last_date = datetime.date.fromisoformat(last_date_str)
+
+                # Back-fill: if cache starts later than required, fetch the gap
+                if first_date > required_start_min:
+                    backfill_end = first_date - datetime.timedelta(days=1)
+                    cursor = required_start_min
+                    backfill_bars = []
+                    while cursor <= backfill_end:
+                        chunk_end = min(cursor + datetime.timedelta(days=60), backfill_end)
+                        try:
+                            mbars = self.kite.historical_data(token, cursor, chunk_end, "minute")
+                            backfill_bars.extend(mbars)
+                        except Exception as e:
+                            print(f"[Simulator] Minute backfill failed for token {token}: {e}")
+                        cursor = chunk_end + datetime.timedelta(days=1)
+                        time.sleep(0.35)
+                    cached_min = backfill_bars + cached_min
+
+                # Forward-fill: fetch new days since last cache entry
+                delta_start = last_date + datetime.timedelta(days=1)
+                if delta_start <= end:
+                    cursor = delta_start
+                    while cursor < end:
+                        chunk_end = min(cursor + datetime.timedelta(days=60), end)
+                        try:
+                            mbars = self.kite.historical_data(token, cursor, chunk_end, "minute")
+                            cached_min.extend(mbars)
+                        except Exception:
+                            pass
+                        cursor = chunk_end
+                        time.sleep(0.35)
+            else:
+                # Full initial download in 60-day chunks
+                cursor = required_start_min
+                cached_min = []
+                while cursor < end:
+                    chunk_end = min(cursor + datetime.timedelta(days=60), end)
+                    try:
+                        mbars = self.kite.historical_data(token, cursor, chunk_end, "minute")
+                        cached_min.extend(mbars)
+                    except Exception:
+                        pass
+                    cursor = chunk_end
+                    time.sleep(0.35)
+
+            # Prune beyond 5 years, save, and group into self.hist_minute
+            cached_min = self._prune_old(cached_min, end)
+            self._save_cache(cache_file, cached_min)
+
             grouped = defaultdict(list)
-            # Fetch minute data in 60 day chunks
-            cursor = start_min
-            success = False
-            while cursor < end:
-                chunk_end = min(cursor + datetime.timedelta(days=60), end)
-                try:
-                    mbars = self.kite.historical_data(token, cursor, chunk_end, "minute")
-                    for b in mbars:
-                        date_key = str(b['date'].date()) if hasattr(b['date'], 'date') else str(b['date'])[:10]
-                        grouped[date_key].append(b)
-                    success = True
-                except Exception as e:
-                    pass
-                cursor = chunk_end
-                time.sleep(0.35)
-                
-            if success and grouped:
-                self.hist_minute[token] = grouped
+            for b in cached_min:
+                date_key = self._bar_date(b)
+                grouped[date_key].append(b)
+            if grouped:
+                self.hist_minute[token] = dict(grouped)
                 min_count += 1
-            
-        print(f"[Simulator] Data load complete. Daily: {count}/{len(self.universe)}, Min: {min_count}/{len(self.universe)}\n")
+
+        print(f"[Simulator] Data load complete. Daily: {count}/{len(all_tokens)}, Min: {min_count}/{len(self.universe)}\n")
 
     # ── 2. Mock Injection for Original Logic ──────────────────
     def _mock_cache_for_day(self, sim_date_str, day_idx):
@@ -347,7 +456,7 @@ class MultiTimeframeSimulator:
     # ── 3. Simulation Core ────────────────────────────────────
     def run(self):
         print("=" * 70)
-        print("   BNF ENGINE V14 — TRUE 1:1 INTRA/SWING SIMULATOR (SENIOR TRADER RULES)")
+        print("   BNF ENGINE V16 — TRUE 1:1 INTRA/SWING SIMULATOR (SENIOR TRADER RULES)")
         print("=" * 70)
         
         # ── 1. Data Fetching Phase ────────────────────────────────
@@ -639,7 +748,7 @@ class MultiTimeframeSimulator:
         
         # Print exit to terminal
         res = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "FLAT"
-        print(f"  {str(exit_t):16s} | {res:10s} | {pos.strategy:18s} | {pos.symbol:10s} | Exit: ₹{exit_p:.1f} | PnL: ₹{pnl:.0f}")
+        print(f"  {str(exit_t):16s} | {res:10s} | {pos.strategy:18s} | {pos.symbol:10s} | Qty: {pos.qty} | Exit: ₹{exit_p:.1f} | PnL: ₹{pnl:.0f}")
 
     def _report_telegram(self, executed):
         wins = [t for t in self.trades if t["pnl"] > 0]
@@ -654,7 +763,7 @@ class MultiTimeframeSimulator:
             print("=" * 70)
             for t in self.trades:
                 res = "WIN" if t["pnl"] > 0 else "LOSS" if t["pnl"] < 0 else "FLAT"
-                print(f"  {t['exit_time'][:16]} | {res:4s} | {t['strategy']:18s} | {t['symbol']:10s} | Entry: ₹{t['entry']:.1f} -> Exit: ₹{t['exit']:.1f} | PnL: ₹{t['pnl']:.0f}")
+                print(f"  {t['exit_time'][:16]} | {res:4s} | {t['strategy']:18s} | {t['symbol']:10s} | Qty: {t['qty']} | Entry: ₹{t['entry']:.1f} -> Exit: ₹{t['exit']:.1f} | PnL: ₹{t['pnl']:.0f}")
 
         # FIX TOP 5 BUG: Only look at actual winners
         top_winners = sorted(wins, key=lambda t: t["pnl"], reverse=True)[:5]
@@ -696,7 +805,7 @@ class MultiTimeframeSimulator:
             # Fallback: send text via ExecutionAgent
             try:
                 msg = (
-                    "🏦 *V15 SIMULATOR COMPLETE*\n"
+                    "🏦 *V16 SIMULATOR COMPLETE*\n"
                     f"Days: `{self.days_back}` | Symbols: `{self.top_n}`\n\n"
                     f"Trades: `{len(self.trades)}`\n"
                     f"Win Rate: `{wr:.1f}%`\n"

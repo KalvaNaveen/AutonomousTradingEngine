@@ -27,7 +27,7 @@ except ImportError as e:
 
 if __name__ == "__main__":
     print("============================================================")
-    print("  BNF ENGINE v14 — FORWARD TESTING (PAPER_MODE=ON)")
+    print("  BNF ENGINE V16 — FORWARD TESTING (PAPER_MODE=ON)")
     print("  Live WebSocket Data | Virtual Orders | Full Strategy Loop")
     print("============================================================\n")
     
