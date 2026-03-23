@@ -162,22 +162,27 @@ class MultiTimeframeSimulator:
         print("[Simulator] Phase 1/2: Daily data (cache → API delta)...")
 
         count = 0
+        daily_api = 0
         for token in all_tokens:
             cache_file = self._cache_path("daily", token)
             cached = self._load_cache(cache_file)
+            dirty = False
 
             if cached:
                 last_date_str = self._bar_date(cached[-1])
                 delta_start = datetime.date.fromisoformat(last_date_str) + datetime.timedelta(days=1)
                 if delta_start > end:
-                    # Cache is already up-to-date
+                    # Cache is already up-to-date — skip API AND save
                     self.hist_daily[token] = cached
                     count += 1
                     continue
                 # Fetch only the missing delta
                 try:
                     new_bars = self.kite.historical_data(token, delta_start, end, "day")
-                    cached.extend(new_bars)
+                    if new_bars:
+                        cached.extend(new_bars)
+                        dirty = True
+                        daily_api += 1
                 except Exception as e:
                     print(f"[Simulator] Daily delta fetch failed for token {token}: {e}")
                 time.sleep(0.35)
@@ -185,14 +190,17 @@ class MultiTimeframeSimulator:
                 # Full initial download
                 try:
                     cached = self.kite.historical_data(token, full_start_daily, end, "day")
+                    dirty = True
+                    daily_api += 1
                 except Exception as e:
                     print(f"[Simulator] Daily full fetch failed for token {token}: {e}")
                     cached = []
                 time.sleep(0.35)
 
-            # Prune older than 5 years and save
+            # Prune older than 5 years — only save if data actually changed
             cached = self._prune_old(cached, end)
-            self._save_cache(cache_file, cached)
+            if dirty:
+                self._save_cache(cache_file, cached)
             self.hist_daily[token] = cached
             if cached:
                 count += 1
@@ -200,6 +208,8 @@ class MultiTimeframeSimulator:
         # Assign convenience refs
         self.nifty_hist = self.hist_daily.get(NIFTY50_TOKEN, [])
         self.vix_hist   = self.hist_daily.get(INDIA_VIX_TOKEN, [])
+        if daily_api == 0:
+            print("[Simulator] Daily cache up-to-date — 0 API calls")
 
         # ── Phase 2/2: Minute bars ────────────────────────────
         # Ensure minute data always covers the full simulation window
@@ -207,9 +217,11 @@ class MultiTimeframeSimulator:
         print(f"[Simulator] Phase 2/2: 1-Minute data (cache → API delta)...")
         print(f"[Simulator] Minute data required from: {required_start_min}")
         min_count = 0
+        min_api = 0
         for token in self.universe:
             cache_file = self._cache_path("minute", token)
             cached_min = self._load_cache(cache_file)  # flat list of minute bars
+            dirty = False
 
             if cached_min:
                 # Check if cache covers far enough back
@@ -217,6 +229,17 @@ class MultiTimeframeSimulator:
                 last_date_str = self._bar_date(cached_min[-1])
                 first_date = datetime.date.fromisoformat(first_date_str)
                 last_date = datetime.date.fromisoformat(last_date_str)
+
+                # Quick check: if cache already covers everything, skip all I/O
+                if first_date <= required_start_min and last_date >= end:
+                    grouped = defaultdict(list)
+                    for b in cached_min:
+                        date_key = self._bar_date(b)
+                        grouped[date_key].append(b)
+                    if grouped:
+                        self.hist_minute[token] = dict(grouped)
+                        min_count += 1
+                    continue  # ← Skip save entirely, cache is perfect
 
                 # Back-fill: if cache starts later than required, fetch the gap
                 if first_date > required_start_min:
@@ -232,7 +255,10 @@ class MultiTimeframeSimulator:
                             print(f"[Simulator] Minute backfill failed for token {token}: {e}")
                         cursor = chunk_end + datetime.timedelta(days=1)
                         time.sleep(0.35)
-                    cached_min = backfill_bars + cached_min
+                    if backfill_bars:
+                        cached_min = backfill_bars + cached_min
+                        dirty = True
+                        min_api += 1
 
                 # Forward-fill: fetch new days since last cache entry
                 delta_start = last_date + datetime.timedelta(days=1)
@@ -242,7 +268,10 @@ class MultiTimeframeSimulator:
                         chunk_end = min(cursor + datetime.timedelta(days=60), end)
                         try:
                             mbars = self.kite.historical_data(token, cursor, chunk_end, "minute")
-                            cached_min.extend(mbars)
+                            if mbars:
+                                cached_min.extend(mbars)
+                                dirty = True
+                                min_api += 1
                         except Exception:
                             pass
                         cursor = chunk_end
@@ -260,10 +289,13 @@ class MultiTimeframeSimulator:
                         pass
                     cursor = chunk_end
                     time.sleep(0.35)
+                dirty = True
+                min_api += 1
 
-            # Prune beyond 5 years, save, and group into self.hist_minute
+            # Prune beyond 5 years — only save if data actually changed
             cached_min = self._prune_old(cached_min, end)
-            self._save_cache(cache_file, cached_min)
+            if dirty:
+                self._save_cache(cache_file, cached_min)
 
             grouped = defaultdict(list)
             for b in cached_min:
@@ -273,6 +305,10 @@ class MultiTimeframeSimulator:
                 self.hist_minute[token] = dict(grouped)
                 min_count += 1
 
+        if min_api == 0:
+            print("[Simulator] Minute cache up-to-date — 0 API calls, 0 disk writes")
+        else:
+            print(f"[Simulator] Minute cache updated — {min_api} API fetches")
         print(f"[Simulator] Data load complete. Daily: {count}/{len(all_tokens)}, Min: {min_count}/{len(self.universe)}\n")
 
     # ── 2. Mock Injection for Original Logic ──────────────────
