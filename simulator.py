@@ -197,8 +197,7 @@ class MultiTimeframeSimulator:
                     cached = []
                 time.sleep(0.35)
 
-            # Prune older than 5 years — only save if data actually changed
-            cached = self._prune_old(cached, end)
+            # [v16] No pruning — keep all historical data, only append new bars
             if dirty:
                 self._save_cache(cache_file, cached)
             self.hist_daily[token] = cached
@@ -292,8 +291,7 @@ class MultiTimeframeSimulator:
                 dirty = True
                 min_api += 1
 
-            # Prune beyond 5 years — only save if data actually changed
-            cached_min = self._prune_old(cached_min, end)
+            # [v16] No pruning — keep all historical data, only append new bars
             if dirty:
                 self._save_cache(cache_file, cached_min)
 

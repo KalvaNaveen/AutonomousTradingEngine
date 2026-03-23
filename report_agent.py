@@ -264,7 +264,28 @@ def build_daily_report(
     lines.append("")
     lines.append(f"⏰ Report generated at {now_ist().strftime('%H:%M')} IST")
 
-    return "\n".join(lines)
+    msg_text = "\n".join(lines)
+
+    # Automatically generate and send PDF if there were trades today
+    if trades_today and FPDF is not None:
+        try:
+            filepath = _build_pdf_report(
+                title="BNF ENGINE - DAILY PERFORMANCE REPORT",
+                period_label=f"Date: {date_str}",
+                trades=trades_today,
+                capital=capital,
+                extra_kv={"Total Scans:": str(total_scans), "Regime:": regime}
+            )
+            if filepath:
+                _send_telegram_document(filepath, caption=f"Detailed Daily PDF Report: {date_str}")
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[REPORT] Failed to build daily PDF: {e}")
+
+    return msg_text
 
 
 # =====================================================================
@@ -312,17 +333,18 @@ class _ReportPDF(FPDF):
         self.cell(0, 5, value, new_x="LMARGIN", new_y="NEXT")
 
     def trade_table_header(self):
-        self.set_font("Helvetica", "B", 7)
+        self.set_font("Helvetica", "B", 6)
         self.set_fill_color(220, 220, 220)
-        cols = [("#", 6), ("DateTime", 26), ("Strategy", 26), ("Symbol", 18),
-                ("Qty", 10), ("Entry", 16), ("Exit", 16), ("PnL", 18),
-                ("Status", 12), ("Reason", 22)]
+        cols = [("#", 5), ("Date", 15), ("Entry Time", 14), ("Exit Time", 14),
+                ("Strategy", 24), ("Symbol", 14), ("Qty", 8),
+                ("Entry", 13), ("Exit", 13), ("PnL", 15),
+                ("Status", 10), ("Reason", 25)]
         for label, w in cols:
             self.cell(w, 5, label, border=1, fill=True, align="C")
         self.ln()
 
     def trade_table_row(self, idx: int, t: dict):
-        self.set_font("Helvetica", "", 7)
+        self.set_font("Helvetica", "", 6)
         pnl = t.get("pnl", t.get("gross_pnl", 0))
         status = _wl(pnl)
 
@@ -336,23 +358,42 @@ class _ReportPDF(FPDF):
 
         entry_p = t.get("entry", t.get("entry_price", 0))
         exit_p = t.get("exit", t.get("full_exit_price", 0))
-        exit_t = str(t.get("exit_time", t.get("timestamp", "")))[:16]
+        
+        # Split dates and times
+        entry_t_str = str(t.get("entry_time", t.get("timestamp", "")))
+        exit_t_str = str(t.get("exit_time", t.get("timestamp", "")))
+        
+        # Parse date and times
+        date_str = ""
+        entry_time_only = ""
+        exit_time_only = ""
+        
+        if exit_t_str and len(exit_t_str) >= 10:
+            date_str = exit_t_str[:10]  # YYYY-MM-DD
+            if " " in exit_t_str:
+                exit_time_only = exit_t_str.split(" ")[1][:5]  # HH:MM
+        
+        if entry_t_str and " " in entry_t_str:
+            entry_time_only = entry_t_str.split(" ")[1][:5]  # HH:MM
+            
         strategy = t.get("strategy", "")[:18]
-        symbol = t.get("symbol", "")[:12]
-        reason = t.get("reason", t.get("exit_reason", ""))[:16]
+        symbol = t.get("symbol", "")[:10]
+        reason = t.get("reason", t.get("exit_reason", ""))[:18]
         qty = str(t.get("qty", 0))
 
         cols = [
-            (str(idx), 6),
-            (exit_t, 26),
-            (strategy, 26),
-            (symbol, 18),
-            (qty, 10),
-            (f"{entry_p:,.1f}", 16),
-            (f"{exit_p:,.1f}", 16),
-            (f"{pnl:+,.0f}", 18),
-            (status, 12),
-            (reason, 22),
+            (str(idx), 5),
+            (date_str, 15),
+            (entry_time_only, 14),
+            (exit_time_only, 14),
+            (strategy, 24),
+            (symbol, 14),
+            (qty, 8),
+            (f"{entry_p:,.1f}", 13),
+            (f"{exit_p:,.1f}", 13),
+            (f"{pnl:+,.0f}", 15),
+            (status, 10),
+            (reason, 25),
         ]
         for val, w in cols:
             self.cell(w, 5, val, border=1, fill=True, align="C")
