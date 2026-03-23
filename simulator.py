@@ -415,6 +415,9 @@ class MultiTimeframeSimulator:
             
         if is_new_day:
             self._sim_cum_vol = {}
+            # [v16] Reset ORB/VWAP data for the new simulated day
+            if self.live_data.tick_store:
+                self.live_data.tick_store.reset_daily()
         
         # Only inject if we have data for this token
         if token in all_minute_bars and time_str in all_minute_bars[token]:
@@ -424,13 +427,22 @@ class MultiTimeframeSimulator:
             current_cum = self._sim_cum_vol.get(token, 0) + bar["volume"]
             self._sim_cum_vol[token] = current_cum
             
-            # Create a fake tick
+            # Create a fake tick with exchange_timestamp so ORB/VWAP tracking works
+            mock_dt = datetime.datetime.strptime(ts_datetime, "%Y-%m-%d %H:%M:%S")
+            from zoneinfo import ZoneInfo
+            mock_dt = mock_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            
             tick = {
                 "instrument_token": token,
                 "last_price": bar["close"],
+                "last_quantity": bar["volume"],
                 "last_traded_quantity": bar["volume"],
                 "average_traded_price": bar["close"],
-                "volume_traded": current_cum, # MUST be cumulative, not fluctuating minute volume
+                "volume": current_cum,
+                "volume_traded": current_cum,
+                "exchange_timestamp": mock_dt,
+                "last_trade_time": mock_dt,
+                "change": 0.0,
                 "ohlc": {"open": bar["open"], "high": bar["high"], "low": bar["low"], "close": bar["close"]},
                 "depth": {"buy": [{"quantity": 100, "price": bar["close"], "orders": 1}],
                           "sell": [{"quantity": 100, "price": bar["close"] * 1.001, "orders": 1}]}
@@ -637,6 +649,12 @@ class MultiTimeframeSimulator:
                             total_executed += 1
                             lbl = "Short" if is_short_val else "Long"
                             print(f"  {date_str} {time_str} | {regime:10s} | {sig['strategy']:18s} | {sig['symbol']:10s} | {lbl} Entry: ₹{sig['entry_price']:.1f}")
+                            
+                            # [v16] S6 cooldown tracking for simulator
+                            if sig["strategy"] == "S6_RSI_SHORT":
+                                if not hasattr(self.scanner, '_s6_cooldown'):
+                                    self.scanner._s6_cooldown = {}
+                                self.scanner._s6_cooldown[sig["symbol"]] = today_date if isinstance(today_date, datetime.date) else datetime.datetime.strptime(str(today_date), "%Y-%m-%d").date()
 
             # EOD Capital Tracking
             self.capital_curve.append(self.current_capital)

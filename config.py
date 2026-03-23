@@ -110,22 +110,29 @@ S1_RSI_THRESHOLD        = 35
 S1_VOLUME_MULTIPLIER    = 1.5
 S1_EMA_PERIOD           = 25
 
+# S6: Connors RSI(4) Intraday Exhaustion Short (MIS)
+S6_RSI_PERIOD           = 4
+S6_RSI_OVERBOUGHT       = 82      # Entry threshold (RSI > this)
+S6_RSI_EXIT             = 40      # Exit when RSI cools below this
+S6_COOLDOWN_DAYS        = 3       # Skip symbol if S6-traded in last N days
+S6_MIN_TURNOVER_CR      = 100     # Only short liquid stocks (₹100 Cr+)
+
 # S2: Overreaction (Intraday Reversal)
-S2_DROP_MIN             = 0.04    # Down from 3% to 4% for "true" panic
+S2_DROP_MIN             = 0.03    # 3% drop minimum (was 4% — too strict)
 S2_DROP_MAX             = 0.12 
-S2_RVOL_MIN             = 2.0     # Require 200% opening volume
+S2_RVOL_MIN             = 1.5     # 150% opening volume (was 200% — too strict)
 S2_PARTIAL_TARGET_1     = 0.010   # Take half at +1% (forces high win rate)
 S2_PARTIAL_TARGET_2     = 0.015   # Final exit at +1.5%
 S2_HARD_STOP_PCT        = 0.006   # Strict -0.6% stop loss
 S2_TIME_STOP_MINUTES    = 30      # Out in 30 mins if stalling
-S2_MIN_TURNOVER_CR      = 250
+S2_MIN_TURNOVER_CR      = 50      # ₹50 Cr turnover (was ₹250 Cr — blocked everything)
 
 # S3: SEPA / VCP (Mid/Small Cap Fundamentals + Tech)
 S3_MIN_EPS_GROWTH        = 25.0
 S3_MIN_SALES_GROWTH      = 20.0
 S3_MIN_ROE               = 17.0
 S3_MAX_DEBT_EQUITY       = 0.5
-S3_MIN_RS_SCORE          = 75     # Top 25% performers
+S3_MIN_RS_SCORE          = 60     # Top 40% performers (was 75 — too restrictive for NSE)
 S3_MIN_TURNOVER_CR       = 25
 S3_MAX_STOP_PCT          = 0.06   # Tighter 6% max stop
 S3_PARTIAL_EXIT_PCT      = 0.12   # Secure 1/2 profit at +12%
@@ -139,7 +146,7 @@ S3_STALL_WEEKS           = 2      # Dump non-performers faster
 
 # S4: Leadership Breakout (Large Cap Momentum)
 S4_MIN_RS_SCORE          = 85     # Top 15% only
-S4_BREAKOUT_VOL_MIN      = 1.8    # 180% volume surge required
+S4_BREAKOUT_VOL_MIN      = 1.3    # 130% volume surge (was 180% — too strict for NSE)
 S4_MAX_BELOW_52W_HIGH    = 0.05
 S4_MAX_STOP_PCT          = 0.06   # 6% max
 S4_PARTIAL_EXIT_PCT      = 0.10   # Bag half the profit at +10%
@@ -153,10 +160,10 @@ S4_TARGET_SWING_PCT      = 0.20   # Cap expectations at +20%
 S5_ORB_PERIOD_MINUTES    = 15
 S5_MIN_ORB_PCT           = 0.005
 S5_MAX_ORB_PCT           = 0.025   # Slightly tighter upper bounds
-S5_VWAP_PROXIMITY_PCT    = 0.004   # Must be very close to VWAP (0.4%)
+S5_VWAP_PROXIMITY_PCT    = 0.010   # Within 1% of VWAP (was 0.4% — too tight)
 S5_ATR_STOP_MULTIPLIER   = 1.0     # 1 ATR max stop
 S5_TARGET_RR             = 1.5     # 1:1.5 RR for higher hit rate
-S5_MIN_TURNOVER_CR       = 500
+S5_MIN_TURNOVER_CR       = 100     # ₹100 Cr turnover (was ₹500 Cr — too strict)
 S5_MIN_RVOL              = 1.5     # Require more volume
 S5_MAX_TRADES_PER_DAY    = 3
 S5_HARD_STOP_PCT         = 0.010   # 1.0% absolute max stop

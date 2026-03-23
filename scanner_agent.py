@@ -214,20 +214,43 @@ class ScannerAgent:
 
     def scan_s6_rsi_short(self, regime: str) -> list:
         """
-        [v15] S6: Connors RSI(4) Intraday Exhaustion Short (MIS)
-        High probability short selling in primary downtrends.
-        Rule 1: Price < 200 SMA (Primary Downtrend)
-        Rule 2: Close > Upper Bollinger Band (20, 2) OR extended
-        Rule 3: RSI(4) > 80 (Short-term exhaustion)
-        Rule 4: Intraday MIS only (Square off at 15:15 natively handled by Engine)
+        [v16] S6: Connors RSI(4) Intraday Exhaustion Short (MIS)
+        ELITE: Institutional-grade short selling in confirmed downtrends ONLY.
+        Rule 1: Nifty below SMA50 (macro weakness — no shorting in bull markets)
+        Rule 2: Price < SMA200 (Primary Downtrend)
+        Rule 3: Death Cross: SMA50 < SMA200 (structural breakdown confirmed)
+        Rule 4: Close > Upper Bollinger Band (20, 2) (exhaustion bounce)
+        Rule 5: RSI(4) > 82 (extreme short-term overbought)
+        Rule 6: 3-day symbol cooldown (no re-entering losers)
+        Rule 7: Minimum ₹100 Cr turnover (liquid names only)
+        Rule 8: Intraday MIS only (square off at 15:15)
         """
         now = now_ist().time()
         # Active only in morning/mid-day to allow intraday trend exhaustion
         if not (datetime.time(9, 30) <= now <= datetime.time(14, 0)):
             return []
 
-        if regime in ("BULL_MAX"): # Do not short in raging bull markets
+        # ── REGIME GATE: Block in bullish or extreme markets ──
+        if regime in ("BULL", "EXTREME_PANIC"):
             return []
+
+        # ── MARKET TREND GATE: Only short when Nifty is BELOW its SMA50 ──
+        # This is THE edge: we only short individual stocks when the broad
+        # market is weak. In bull markets, even weak stocks get lifted.
+        nifty_sma50 = 0.0
+        if self.data.daily_cache and self.data.daily_cache.is_loaded():
+            nifty_sma50 = self.data.daily_cache.get_sma50(NIFTY50_TOKEN)
+        nifty_ltp = 0.0
+        if self.data.tick_store and self.data.tick_store.is_ready():
+            nifty_ltp = self.data.tick_store.get_ltp_if_fresh(NIFTY50_TOKEN)
+        if nifty_ltp > 0 and nifty_sma50 > 0 and nifty_ltp > nifty_sma50:
+            return []  # Market is bullish — no shorts
+
+        # Initialise cooldown tracker if not present
+        if not hasattr(self, '_s6_cooldown'):
+            self._s6_cooldown = {}  # symbol -> last_trade_date
+
+        import config as cfg
 
         signals = []
         universe = self.data.UNIVERSE
@@ -243,6 +266,8 @@ class ScannerAgent:
                     fallback_prices[k.split(":")[1]] = v.get("last_price", 0.0)
             except Exception: pass
 
+        today = now_ist().date()
+
         for token, symbol in universe.items():
             if self.blackout and self.blackout.is_blackout(): continue
 
@@ -251,36 +276,51 @@ class ScannerAgent:
             if current <= 0: continue
             if not cache_ready: continue
 
-            # ── 1. Primary Downtrend Filter ──
+            # ── COOLDOWN: Skip if S6-traded this symbol within last N days ──
+            last_s6_date = self._s6_cooldown.get(symbol)
+            if last_s6_date:
+                days_since = (today - last_s6_date).days
+                if days_since < cfg.S6_COOLDOWN_DAYS:
+                    continue
+
+            # ── TURNOVER FILTER: Only short liquid stocks ──
+            if self.data.get_avg_daily_turnover_cr(token) < cfg.S6_MIN_TURNOVER_CR:
+                continue
+
+            # ── 1. Primary Downtrend Filter: Price < SMA200 ──
             sma200 = self.data.daily_cache.get_sma200(token)
             if current > sma200 or sma200 <= 0:
                 continue
 
-            # ── 2. Structural Overbought ──
+            # ── 1b. Death Cross: SMA50 < SMA200 (confirms structural breakdown) ──
+            sma50 = self.data.daily_cache.get_sma50(token)
+            if sma50 >= sma200 or sma50 <= 0:
+                continue  # No death cross = stock may be recovering
+
+            # ── 2. Structural Overbought: Price > Upper BB ──
             bb_hi = self.data.daily_cache.get_bb_upper(token)
             if current <= bb_hi or bb_hi <= 0:
                 continue
 
-            # ── 3. Short Term Exhaustion (RSI-4) ──
+            # ── 3. Short Term Exhaustion: RSI(4) > 82 ──
             closes = self.data.daily_cache.get_closes(token)
             if len(closes) < 10: continue
-                
+
             live_closes = closes.copy()
             live_closes.append(current)
-            
-            import config
-            rsi_4 = (DataAgent.compute_rsi(live_closes, config.S1_RSI_PERIOD) or [50])[-1]
-            if rsi_4 <= 82: # Only extreme exhaustion
+
+            rsi_4 = (DataAgent.compute_rsi(live_closes, cfg.S6_RSI_PERIOD) or [50])[-1]
+            if rsi_4 <= cfg.S6_RSI_OVERBOUGHT:
                 continue
 
             # ── Stops & Targets ──
             atr = self.data.daily_cache.get_atr(token)
             if atr <= 0: atr = current * 0.03
-                
+
             atr_stop = current + (atr * 1.2)  # Tighter stop for shorts
-            hard_ceiling = current * 1.03 # 3% hard stop (was 5%)
+            hard_ceiling = current * 1.03      # 3% hard stop
             stop_price = min(atr_stop, hard_ceiling)
-            
+
             if stop_price <= current * 1.002:
                 continue   # skip, stop too tight
 
@@ -291,7 +331,7 @@ class ScannerAgent:
                 "regime":         regime,
                 "entry_price":    current,
                 "partial_target": round(current - (stop_price - current), 2),
-                "target_price":   round(current - (stop_price - current) * 3, 2), # Trail to EOD or RSI < 40
+                "target_price":   round(current - (stop_price - current) * 3, 2),
                 "stop_price":     round(stop_price, 2),
                 "rsi_4":          round(rsi_4, 2),
                 "atr":            round(atr, 2),
@@ -471,15 +511,15 @@ class ScannerAgent:
             if not self._reversal_candle(candles):
                 continue
 
-            # ── Pivot support — daily_cache ───────────────────────────
+            # ── Pivot support — soft scoring (not hard reject) ────────
+            support_bonus = 0
             support = self.data.compute_pivot_support(token)
-            if support > 0 and abs(current - support) / support > 0.015:
-                continue
+            if support > 0 and abs(current - support) / support <= 0.015:
+                support_bonus = 1  # Near pivot support = bonus for ranking
 
-            # ── Bid/ask depth — tick_store ────────────────────────────
+            # ── Bid/ask depth — soft scoring (not hard reject) ────────
             depth = self.data.get_order_depth(token)
-            if not depth or depth.get("bid_ask_ratio", 0) < 1.3:
-                continue
+            depth_ratio = depth.get("bid_ask_ratio", 1.0) if depth else 1.0
 
             signals.append({
                 "strategy":          "S2_OVERREACTION",
@@ -491,13 +531,14 @@ class ScannerAgent:
                 "stop_price":        round(current * (1 - S2_HARD_STOP_PCT), 2),
                 "drop_pct":          round(drop * 100, 2),
                 "rvol":              round(rvol, 2),
-                "bid_ask_ratio":     round(depth.get("bid_ask_ratio", 0), 2),
+                "bid_ask_ratio":     round(depth_ratio, 2),
+                "_rank_score":       rvol + support_bonus + (depth_ratio - 1.0),
                 "product":           "MIS",
                 "time_stop_minutes": S2_TIME_STOP_MINUTES,
                 "entry_time":        None,
             })
 
-        return sorted(signals, key=lambda x: x["rvol"], reverse=True)[:3]
+        return sorted(signals, key=lambda x: x.get("_rank_score", 0), reverse=True)[:3]
 
     def _reversal_candle(self, candles: list) -> bool:
         if len(candles) < 2:
@@ -637,7 +678,7 @@ class ScannerAgent:
             if nifty_ltp > 0 and nifty_open > 0 and stock_open > 0:
                 nifty_chg = (nifty_ltp - nifty_open) / nifty_open
                 stock_chg = (current - stock_open) / stock_open
-                if stock_chg <= nifty_chg * 1.1:  # [v15] 10% outperformance req
+                if stock_chg <= nifty_chg * 1.05:  # [v16] 5% outperformance req (was 10%)
                     continue
 
             # ── Volume confirmation: regime-adaptive ──────────────────
@@ -656,9 +697,9 @@ class ScannerAgent:
             if rvol < vol_threshold:
                 continue
 
-            # ── Sector relative strength (new filter) ─────────────────
+            # ── Sector relative strength (soft filter) ─────────────────
             sector_rs = self.data.daily_cache.get_sector_rs(symbol)
-            if sector_rs < 70:  # Weak sector protection
+            if sector_rs > 0 and sector_rs < 70:  # Only block if we have real data
                 continue
 
             stop = round(current * (1 - S4_MAX_STOP_PCT), 2)

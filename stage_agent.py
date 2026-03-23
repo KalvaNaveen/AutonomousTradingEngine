@@ -72,8 +72,8 @@ class StageAgent:
         # Criterion 6: ≥30% above 52-week low
         if low_52w > 0 and price < low_52w * 1.30:
             return False
-        # Criterion 7: within 25% of 52-week high
-        if high_52w > 0 and price < high_52w * 0.75:
+        # Criterion 7: within 35% of 52-week high (relaxed for NSE mid/small caps)
+        if high_52w > 0 and price < high_52w * 0.65:
             return False
         # Criterion 8: RS score ≥ 70
         if rs_score < S3_MIN_RS_SCORE:
