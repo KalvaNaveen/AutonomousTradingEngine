@@ -8,7 +8,7 @@ Sub-millisecond local IPC. The Go binary then fires
 the order to Zerodha Kite's REST API in compiled machine code.
 
 Usage in execution_agent.py:
-    from go_bridge import GoBridge
+    from core.go_bridge import GoBridge
     bridge = GoBridge()
     result = bridge.send_order({
         "action": "BUY", "symbol": "RELIANCE", "exchange": "NSE",
@@ -49,13 +49,15 @@ class GoBridge:
             print(f"[GoBridge] Initial connection failed: {e}. Attempting to start Go executor...")
             try:
                 import subprocess, os
-                cwd = os.path.dirname(os.path.abspath(__file__))
-                exe_path = os.path.join(cwd, "tick_server.exe")
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                cwd = os.path.join(base_dir, "go_executor")
+                exe_path = os.path.join(cwd, "trade_executor.exe")
                 
                 if os.path.exists(exe_path):
                     subprocess.Popen([exe_path], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    subprocess.Popen(["go", "run", "cmd/server/main.go"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    # Fallback to source if exe is missing
+                    subprocess.Popen(["go", "run", "trade_executor.go"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     
                 time.sleep(2.5) # Allow 2.5 seconds for the Go server to bind to port 9559
                 

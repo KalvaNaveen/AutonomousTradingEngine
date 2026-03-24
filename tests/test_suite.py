@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 """
 BNF Paper Agent — E2E test harness for v12.
 
@@ -41,23 +45,23 @@ from config import (
     NIFTY50_TOKEN, INDIA_VIX_TOKEN,
     JOURNAL_DB, STATE_DB, now_ist, today_ist
 )
-from tick_store import TickStore
-from daily_cache import DailyCache
-from paper_broker import PaperBroker
-from auto_login import AutoLogin
-from blackout_calendar import BlackoutCalendar
-from state_manager import StateManager
-from data_agent import DataAgent
-from scanner_agent import ScannerAgent
-from risk_agent import RiskAgent
-from journal import Journal
-from execution_agent import ExecutionAgent
-from fundamental_agent import FundamentalAgent
-from stage_agent import StageAgent
-from vcp_agent import VCPAgent
-from market_status_agent import MarketStatusAgent
-from sector_agent import SectorAgent
-from earnings_agent import EarningsAgent
+from storage.tick_store import TickStore
+from storage.daily_cache import DailyCache
+from core.paper_broker import PaperBroker
+from core.auto_login import AutoLogin
+from core.blackout_calendar import BlackoutCalendar
+from core.state_manager import StateManager
+from agents.data_agent import DataAgent
+from agents.scanner_agent import ScannerAgent
+from agents.risk_agent import RiskAgent
+from core.journal import Journal
+from agents.execution_agent import ExecutionAgent
+from agents.fundamental_agent import FundamentalAgent
+from agents.stage_agent import StageAgent
+from agents.vcp_agent import VCPAgent
+from agents.market_status_agent import MarketStatusAgent
+from agents.sector_agent import SectorAgent
+from agents.earnings_agent import EarningsAgent
 
 RESULTS_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "test_results.json"
@@ -96,11 +100,11 @@ class EngineTestSuite:
 
     def _pass(self, point: str, detail: str = ""):
         self.results[point] = {"status": "PASS", "detail": detail}
-        print(f"  ✅  {point}: {detail}")
+        print(f"  [PASS]  {point}: {detail}")
 
     def _fail(self, point: str, detail: str = ""):
         self.results[point] = {"status": "FAIL", "detail": detail}
-        print(f"  ❌  {point}: {detail}")
+        print(f"  [FAIL]  {point}: {detail}")
 
     # ── Main run ──────────────────────────────────────────────────────
 
@@ -284,8 +288,8 @@ class EngineTestSuite:
         self.earnings_agent.preload(list(self.data.UNIVERSE.values()))
 
         # [v14] Phase 4 Institutional Layer
-        from macro_agent import MacroAgent
-        from order_flow_agent import OrderFlowAgent
+        from agents.macro_agent import MacroAgent
+        from agents.order_flow_agent import OrderFlowAgent
         self.macro_agent         = MacroAgent()
         self.order_flow_agent    = OrderFlowAgent(self.tick_store)
 
@@ -719,13 +723,13 @@ class EngineTestSuite:
         ws_ok   = self.tick_store and self.tick_store.is_ready()
         dc_ok   = self.daily_cache and self.daily_cache.is_loaded()
         msg     = (
-            f"📋 *BNF PAPER AGENT v12 — TEST RUN*\n"
+            f"[INFO] *BNF PAPER AGENT v12 — TEST RUN*\n"
             f"Date: `{today_ist()}`\n"
-            f"WebSocket: `{'✅ live' if ws_ok else '⚠️ not ready'}`\n"
-            f"Daily cache: `{'✅ loaded' if dc_ok else '⚠️ not loaded'}`\n"
+            f"WebSocket: `{'[PASS] live' if ws_ok else '[WARN] not ready'}`\n"
+            f"Daily cache: `{'[PASS] loaded' if dc_ok else '[WARN] not loaded'}`\n"
             f"Tests: `{passed}/{TOTAL_TESTS} passed` | `{failed} failed`\n"
             f"Paper orders: `{summary.get('total_orders', 0)}`\n"
-            f"Realised PnL: ₹`{summary.get('realised_pnl', 0):+,.2f}`\n"
+            f"Realised PnL: Rs.`{summary.get('realised_pnl', 0):+,.2f}`\n"
             f"See test_results.json for detail."
         )
         if self.execution:
@@ -744,21 +748,21 @@ class EngineTestSuite:
         print("PAPER AGENT — TEST RESULTS")
         print("=" * 60)
         for k, v in self.results.items():
-            icon = "✅" if v["status"] == "PASS" else "❌"
+            icon = "[PASS]" if v["status"] == "PASS" else "[FAIL]"
             print(f"  {icon}  {k:<35} {v['detail']}")
 
         summary = self.broker.get_paper_summary() if self.broker else {}
         print(f"\nWebSocket: {'connected' if self.tick_store and self.tick_store.is_ready() else 'not ready'}")
         print(f"Daily cache: {'loaded' if self.daily_cache and self.daily_cache.is_loaded() else 'not loaded'}")
         print(f"Paper session: {summary.get('total_orders', 0)} orders | "
-              f"₹{summary.get('realised_pnl', 0):+,.2f} PnL")
+              f"Rs.{summary.get('realised_pnl', 0):+,.2f} PnL")
         print(f"\nResults: {passed}/{total} passed | {failed} failed")
 
         if failed == 0:
-            print("\n✅ ALL TESTS PASSED")
+            print("\n[PASS] ALL TESTS PASSED")
             print("Run daily for 30 sessions then set PAPER_MODE=false to go live.")
         else:
-            print(f"\n❌ {failed} TEST(S) FAILED — fix before going live")
+            print(f"\n[FAIL] {failed} TEST(S) FAILED — fix before going live")
 
         print("\nMANUAL CHECKS (cannot be automated):")
         print("  M1. Check a journal entry — confirm S1 stop_price = prior daily close")
@@ -779,12 +783,12 @@ class EngineTestSuite:
         print(f"\nResults saved: {RESULTS_FILE}")
 
         if self.execution:
-            status_line = (f"✅ ALL {passed}/{total} PASSED" if failed == 0
-                           else f"❌ {failed} FAILED / {passed} PASSED")
+            status_line = (f"[PASS] ALL {passed}/{total} PASSED" if failed == 0
+                           else f"[FAIL] {failed} FAILED / {passed} PASSED")
             self.execution.alert(
-                f"📋 *PAPER AGENT COMPLETE*\n"
+                f"[INFO] *PAPER AGENT COMPLETE*\n"
                 f"{status_line}\n"
-                f"Paper PnL: ₹`{summary.get('realised_pnl', 0):+,.2f}`\n"
+                f"Paper PnL: Rs.`{summary.get('realised_pnl', 0):+,.2f}`\n"
                 f"{'Ready for 30-session run. Go live after that.' if failed == 0 else 'Fix failures before going live.'}"
             )
 
@@ -977,7 +981,7 @@ class EngineTestSuite:
     def _test_go_bridge(self):
         print("\n[26/27] go_bridge ...")
         try:
-            from go_bridge import GoBridge
+            from core.go_bridge import GoBridge
             bridge = GoBridge()
             connected = bridge.connect()
             if connected:
@@ -1118,4 +1122,4 @@ def _simulate_s4_on_history(symbol: str, bars: list) -> list:
         return trades
 
 if __name__ == "__main__":
-    PaperAgent().run()
+    EngineTestSuite().run()

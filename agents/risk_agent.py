@@ -19,7 +19,7 @@ class RiskAgent:
             return False, f"ENGINE_STOPPED: {self.stop_reason}"
         if self.daily_pnl <= -(self.capital * DAILY_LOSS_LIMIT_PCT):
             self.engine_stopped = True
-            self.stop_reason    = f"DAILY_LOSS_LIMIT ₹{abs(self.daily_pnl):.0f}"
+            self.stop_reason    = f"DAILY_LOSS_LIMIT Rs.{abs(self.daily_pnl):.0f}"
             return False, self.stop_reason
         if self.consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
             self.engine_stopped = True
@@ -104,8 +104,8 @@ class RiskAgent:
 
         # Total trade PnL = partial profit (already added to daily_pnl) + final leg.
         # Win/loss streak uses NET result across all legs, not final leg alone.
-        # Without this: a trade that books +₹500 partial then gets stopped for
-        # -₹200 on remaining is a NET WIN but was counted as a loss (streak +1).
+        # Without this: a trade that books +Rs.500 partial then gets stopped for
+        # -Rs.200 on remaining is a NET WIN but was counted as a loss (streak +1).
         total_trade_pnl = pos.get("realised_pnl", 0.0) + final_leg_pnl
         self.consecutive_losses = (0 if total_trade_pnl > 0
                                    else self.consecutive_losses + 1)

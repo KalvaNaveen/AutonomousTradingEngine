@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 """
 Polls Zerodha order status every 30 seconds after entry placement.
 Handles:
@@ -10,7 +14,7 @@ Handles:
 import datetime
 import time
 from kiteconnect import KiteConnect
-from state_manager import StateManager
+from core.state_manager import StateManager
 from config import FILL_POLL_INTERVAL_SEC, FILL_TIMEOUT_MINUTES, now_ist
 
 
@@ -71,8 +75,8 @@ class FillMonitor:
                 )
                 if alert_fn:
                     alert_fn(
-                        f"✅ *FILLED*: `{symbol}` "
-                        f"Qty:`{actual_qty}` @ ₹`{actual_price:.2f}`"
+                        f"[PASS] *FILLED*: `{symbol}` "
+                        f"Qty:`{actual_qty}` @ Rs.`{actual_price:.2f}`"
                     )
                 return trade
 
@@ -80,7 +84,7 @@ class FillMonitor:
             if status["status"] in ("CANCELLED", "REJECTED"):
                 if alert_fn:
                     alert_fn(
-                        f"⚠️ *ENTRY {status['status']}*: `{symbol}`\n"
+                        f"[WARN] *ENTRY {status['status']}*: `{symbol}`\n"
                         f"No position opened."
                     )
                 trade["entry_cancelled"] = True
@@ -118,8 +122,8 @@ class FillMonitor:
         )
         if alert_fn:
             alert_fn(
-                f"⚠️ *PARTIAL FILL*: `{symbol}`\n"
-                f"Filled: `{filled_qty}` of `{trade['qty']}` @ ₹`{actual_price:.2f}`\n"
+                f"[WARN] *PARTIAL FILL*: `{symbol}`\n"
+                f"Filled: `{filled_qty}` of `{trade['qty']}` @ Rs.`{actual_price:.2f}`\n"
                 f"SL and target adjusted to filled qty."
             )
         return trade
@@ -266,7 +270,7 @@ class FillMonitor:
                     )
                 except Exception as e:
                     self._alert(
-                        f"⚠️ *SL MODIFY FAILED* `{trade.get('symbol', '?')}`\n"
+                        f"[WARN] *SL MODIFY FAILED* `{trade.get('symbol', '?')}`\n"
                         f"Remaining qty {remaining} not applied to SL-M.\n"
                         f"Manual intervention may be needed.\n`{e}`"
                     )

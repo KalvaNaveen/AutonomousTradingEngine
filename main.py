@@ -20,23 +20,23 @@ import schedule
 from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 
-from auto_login import AutoLogin
-from blackout_calendar import BlackoutCalendar
-from state_manager import StateManager
-from tick_store import TickStore
-from daily_cache import DailyCache
-from paper_broker import PaperBroker
-from data_agent import DataAgent
-from scanner_agent import ScannerAgent
-from risk_agent import RiskAgent
-from journal import Journal
-from execution_agent import ExecutionAgent
+from core.auto_login import AutoLogin
+from core.blackout_calendar import BlackoutCalendar
+from core.state_manager import StateManager
+from storage.tick_store import TickStore
+from storage.daily_cache import DailyCache
+from core.paper_broker import PaperBroker
+from agents.data_agent import DataAgent
+from agents.scanner_agent import ScannerAgent
+from agents.risk_agent import RiskAgent
+from core.journal import Journal
+from agents.execution_agent import ExecutionAgent
 from kiteconnect import KiteTicker
 # [v10] Minervini agents
-from fundamental_agent import FundamentalAgent
-from stage_agent import StageAgent
-from vcp_agent import VCPAgent
-from market_status_agent import MarketStatusAgent
+from agents.fundamental_agent import FundamentalAgent
+from agents.stage_agent import StageAgent
+from agents.vcp_agent import VCPAgent
+from agents.market_status_agent import MarketStatusAgent
 from config import (
     KITE_API_KEY, TOTAL_CAPITAL, NIFTY50_TOKEN, INDIA_VIX_TOKEN,
     MAX_OPEN_POSITIONS, S1_MAX_HOLD_DAYS, S2_TIME_STOP_MINUTES,
@@ -104,11 +104,11 @@ class BNFEngine:
             available = float(margins["available"]["live_balance"])
             if available <= 0:
                 raise ValueError(f"live_balance={available} — unusable")
-            print(f"[Capital] Live balance from Kite: ₹{available:,.0f}")
+            print(f"[Capital] Live balance from Kite: Rs.{available:,.0f}")
             return available
         except Exception as e:
             print(f"[Capital] margins() failed: {e} — "
-                  f"using .env fallback ₹{TOTAL_CAPITAL:,.0f}")
+                  f"using .env fallback Rs.{TOTAL_CAPITAL:,.0f}")
             return TOTAL_CAPITAL
 
     def _init_kite(self):
@@ -201,11 +201,11 @@ class BNFEngine:
                 symbol_token=symbol_token,
             )
             print(f"[BNFEngine] PAPER MODE — orders virtual, "
-                  f"capital fixed ₹{self.capital:,.0f}")
+                  f"capital fixed Rs.{self.capital:,.0f}")
         else:
             self.kite = real_kite
             print(f"[BNFEngine] LIVE MODE — real orders, "
-                  f"capital ₹{self.capital:,.0f}")
+                  f"capital Rs.{self.capital:,.0f}")
 
         # 10 — [v10] Minervini agents + Phase 3 Intelligence
         self.fundamental_agent   = FundamentalAgent()
@@ -215,10 +215,10 @@ class BNFEngine:
             self.daily_cache, self.tick_store, NIFTY50_TOKEN
         )
         
-        from sector_agent import SectorAgent
-        from earnings_agent import EarningsAgent
-        from macro_agent import MacroAgent
-        from order_flow_agent import OrderFlowAgent
+        from agents.sector_agent import SectorAgent
+        from agents.earnings_agent import EarningsAgent
+        from agents.macro_agent import MacroAgent
+        from agents.order_flow_agent import OrderFlowAgent
         self.sector_agent        = SectorAgent(self.daily_cache, self.tick_store)
         self.earnings_agent      = EarningsAgent()
         self.macro_agent         = MacroAgent()
@@ -248,7 +248,7 @@ class BNFEngine:
 
         # [v14] Go Trade Executor bridge — optional, falls back to Python if not running
         try:
-            from go_bridge import GoBridge
+            from core.go_bridge import GoBridge
             self.go_bridge = GoBridge()
             if self.go_bridge.connect():
                 self.execution._go_bridge = self.go_bridge
@@ -340,9 +340,9 @@ class BNFEngine:
             f"Date: `{today_ist()}`\n"
             f"Regime: `{self.regime}`\n"
             f"Universe: `{universe_count}` symbols\n"
-            f"Cache: `{'✅' if cache_ok else '⚠️'}`  "
-            f"WS: `{'✅' if ws_ok else '⚠️'}`  "
-            f"Fund: `{'✅' if fund_loaded else '⚠️'}`"
+            f"Cache: `{'[PASS]' if cache_ok else '[WARN]'}`  "
+            f"WS: `{'[PASS]' if ws_ok else '[WARN]'}`  "
+            f"Fund: `{'[PASS]' if fund_loaded else '[WARN]'}`"
         )
 
         # [v13] Pre-scan S1 candidates — blocked in CHOP and BEAR_PANIC
@@ -402,7 +402,7 @@ class BNFEngine:
                     "Check network / Kite connection."
                 )
             elif not self._ws_was_fresh and now_fresh:
-                self.execution.alert("✅ *WEBSOCKET RECONNECTED* — live ticks restored.")
+                self.execution.alert("[PASS] *WEBSOCKET RECONNECTED* — live ticks restored.")
             self._ws_was_fresh = now_fresh
 
         can_trade, reason = self.scanner.is_valid_trading_time()
@@ -525,10 +525,22 @@ class BNFEngine:
             self.execution.alert(
                 f"📄 *PAPER SESSION SUMMARY*\n"
                 f"Orders: `{s['total_orders']}` | Filled: `{s['filled']}`\n"
-                f"Realised PnL: ₹`{s['realised_pnl']:+,.2f}`\n"
-                f"Margin deployed: ₹`{s['capital_deployed']:,.0f}`"
+                f"Realised PnL: Rs.`{s['realised_pnl']:+,.2f}`\n"
+                f"Margin deployed: Rs.`{s['capital_deployed']:,.0f}`"
             )
         self.execution.alert("🔴 *BNF ENGINE v12 — MARKET CLOSED*")
+
+    def update_historical_db(self):
+        """[v16] Automatically append today's EOD data to SQLite history."""
+        if not self.execution:
+            return
+        self.execution.alert("🔄 *EOD DATA UPDATE* — Initiating SQLite historical sync...")
+        try:
+            from scripts import update_eod_data
+            update_eod_data.main()
+            self.execution.alert("[PASS] *EOD DATA UPDATE* — SQLite synced successfully.")
+        except Exception as e:
+            self.execution.alert(f"🚨 *EOD DATA ERROR*\nFailed to update SQLite DB: {e}")
 
     # ── Helper ────────────────────────────────────────────────────
 
@@ -557,7 +569,7 @@ class BNFEngine:
         [v15] Every Sunday at 16:00 IST.
         Sends a professional PDF weekly report to Telegram.
         """
-        from report_agent import build_weekly_report
+        from agents.report_agent import build_weekly_report
         if not self.execution:
             return
         today     = today_ist()
@@ -578,7 +590,7 @@ class BNFEngine:
         [v15] 1st of month at 16:00 IST.
         Sends a professional PDF monthly report to Telegram.
         """
-        from report_agent import build_monthly_report
+        from agents.report_agent import build_monthly_report
         if not self.execution:
             return
         today = today_ist()
@@ -620,15 +632,16 @@ class BNFEngine:
         from config import PAPER_MODE
         mode = "PAPER" if PAPER_MODE else "LIVE"
         print(f"[BNF ENGINE v12] Starting. Mode: {mode}. "
-              f"Capital: ₹{self.capital:,.0f}")
+              f"Capital: Rs.{self.capital:,.0f}")
 
         # Schedule all tasks
         schedule.every().day.at("08:30").do(self.auto_token_refresh)
         schedule.every().day.at("08:45").do(self.refresh_calendar)
         schedule.every().day.at("08:45").do(self.preload_cache)
         schedule.every().day.at("09:00").do(self.pre_market)
-        schedule.every(1).minutes.do(self.tick)
+        # tick() is now handled by the precision while loop below
         schedule.every().day.at("15:30").do(self.end_of_day)
+        schedule.every().day.at("15:45").do(self.update_historical_db)
         schedule.every().monday.at("08:00").do(self.refresh_calendar)
         # [v9] Weekly summary — every Sunday at 16:00 IST
         schedule.every().sunday.at("16:00").do(self.weekly_summary)
@@ -655,9 +668,19 @@ class BNFEngine:
             self.preload_cache()
             self.pre_market()
 
+        print("[BNFEngine] Entering main execution loop...")
         while True:
             schedule.run_pending()
-            time.sleep(30)
+            
+            # [v16] Precision Tick Alignment
+            # Run the tick engine exactly at 1 second past every minute (XX:XX:01)
+            # This guarantees that the live engine evaluates fully formed, perfectly closed 
+            # 1-minute candles, perfectly syncing its decisions with simulator.py!
+            if now_ist().second == 1:
+                self.tick()
+                time.sleep(1)  # Prevent double-firing within the same second
+                
+            time.sleep(0.2)  # Tight loop for millisecond-level precision
 
 
 if __name__ == "__main__":

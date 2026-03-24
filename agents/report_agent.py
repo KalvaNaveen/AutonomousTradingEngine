@@ -34,7 +34,7 @@ except ImportError:
 # ── Helpers ───────────────────────────────────────────────────────
 
 def _fmt(value: float) -> str:
-    return f"₹{value:+,.0f}" if value != 0 else "₹0"
+    return f"Rs.{value:+,.0f}" if value != 0 else "Rs.0"
 
 def _pct(value: float) -> str:
     return f"{value:+.2f}%"
@@ -43,7 +43,7 @@ def _emoji_pnl(pnl: float) -> str:
     return "📈" if pnl >= 0 else "📉"
 
 def _trade_icon(pnl: float) -> str:
-    return "✅" if pnl > 0 else "❌" if pnl < 0 else "➖"
+    return "[PASS]" if pnl > 0 else "[FAIL]" if pnl < 0 else "➖"
 
 def _separator() -> str:
     return "━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -100,11 +100,11 @@ def _notes_daily(stats: dict) -> list:
         tips.append("📭 No trades today — filters active or market quiet")
         return tips
     if wr < 40:
-        tips.append(f"⚠️ Below target — {wr:.0f}% WR. Review SL and entry criteria")
+        tips.append(f"[WARN] Below target — {wr:.0f}% WR. Review SL and entry criteria")
     elif wr >= 60:
         tips.append(f"🎯 Strong day — {wr:.0f}% WR. Strategy aligned well")
     if total > 0 and losses / total > 0.5:
-        tips.append("🛑 >50% trades hit SL — consider pausing or widening stops")
+        tips.append("[STOP] >50% trades hit SL — consider pausing or widening stops")
     if streak >= 2:
         tips.append(f"🔥 {streak} consecutive losses — reduce size until regime improves")
     pnl = stats.get("gross_pnl", 0)
@@ -124,7 +124,7 @@ def _notes_period(stats: dict, label: str) -> list:
     if wr >= 55:
         tips.append(f"🎯 Solid {label} — {wr:.0f}% WR across {total} trades")
     elif wr < 40:
-        tips.append(f"⚠️ {label} WR {wr:.0f}% is below target. Review strategy fit")
+        tips.append(f"[WARN] {label} WR {wr:.0f}% is below target. Review strategy fit")
     if pnl > 0:
         tips.append(f"💪 Net positive {label} — capital growing steadily")
     elif pnl < 0:
@@ -162,7 +162,7 @@ def build_daily_report(
     avg_loss = stats.get("avg_loss", 0)
 
     lines = []
-    lines.append(f"📋 *FULL DAY REPORT — {date_str}*")
+    lines.append(f"[INFO] *FULL DAY REPORT — {date_str}*")
     lines.append(_separator())
 
     # Market Context
@@ -170,7 +170,7 @@ def build_daily_report(
     lines.append("🏦 *MARKET CONTEXT*")
     if nifty_price > 0:
         nifty_icon = "📈" if nifty_change_pct >= 0 else "📉"
-        lines.append(f"{nifty_icon} Nifty 50: ₹{nifty_price:,.2f} ({nifty_change_pct:+.2f}%)")
+        lines.append(f"{nifty_icon} Nifty 50: Rs.{nifty_price:,.2f} ({nifty_change_pct:+.2f}%)")
     if vix > 0:
         lines.append(f"🌡️ India VIX: {vix:.2f}")
     lines.append(f"🧠 Regime: `{regime}`")
@@ -183,7 +183,7 @@ def build_daily_report(
 
     # Trade Breakdown
     lines.append("")
-    lines.append("📋 *TRADE BREAKDOWN*")
+    lines.append("[INFO] *TRADE BREAKDOWN*")
     lines.append(f"Total: `{total}` ({wins}W / {losses}L)")
     lines.append(f"🎯 Win Rate: `{wr:.1f}%`")
     if avg_win != 0:
@@ -221,7 +221,7 @@ def build_daily_report(
             qty = t.get("qty", 0)
             lines.append(
                 f"{icon} `{sym}` | {strat} | Qty: {qty}\n"
-                f"    ₹{entry_px:,.1f} → ₹{exit_px:,.1f} | {_fmt(t_pnl)} ({reason})"
+                f"    Rs.{entry_px:,.1f} → Rs.{exit_px:,.1f} | {_fmt(t_pnl)} ({reason})"
             )
 
     # Top 5 Winners
@@ -233,18 +233,18 @@ def build_daily_report(
         lines.append("")
         lines.append("🏆 *TOP WINNERS*")
         for t in sorted_wins:
-            lines.append(f"  ✅ `{t['symbol']}` {_fmt(t['gross_pnl'])}")
+            lines.append(f"  [PASS] `{t['symbol']}` {_fmt(t['gross_pnl'])}")
     if sorted_losses:
         lines.append("")
-        lines.append("🛑 *TOP LOSERS*")
+        lines.append("[STOP] *TOP LOSERS*")
         for t in sorted_losses:
-            lines.append(f"  ❌ `{t['symbol']}` {_fmt(t['gross_pnl'])}")
+            lines.append(f"  [FAIL] `{t['symbol']}` {_fmt(t['gross_pnl'])}")
 
     # Capital Status
     lines.append("")
     lines.append("💼 *CAPITAL STATUS*")
-    lines.append(f"Starting: `₹{capital:,.0f}`")
-    lines.append(f"Closing: `₹{closing_capital:,.0f}`")
+    lines.append(f"Starting: `Rs.{capital:,.0f}`")
+    lines.append(f"Closing: `Rs.{closing_capital:,.0f}`")
     lines.append(f"Total Return: `{_pct(day_roi)}`")
 
     # System Health
@@ -736,7 +736,7 @@ def _build_text_period_report(
     lines.append(f"📊 ROI: `{_pct(roi)}`")
 
     lines.append("")
-    lines.append("📋 *TRADE BREAKDOWN*")
+    lines.append("[INFO] *TRADE BREAKDOWN*")
     lines.append(f"Total: `{total}` ({wins}W / {losses}L)")
     lines.append(f"🎯 Win Rate: `{wr:.1f}%`")
 
@@ -744,8 +744,8 @@ def _build_text_period_report(
     worst = period_stats.get("worst_regime", "—")
     lines.append("")
     lines.append("🧠 *REGIME PERFORMANCE*")
-    lines.append(f"✅ Best: `{best}`")
-    lines.append(f"❌ Worst: `{worst}`")
+    lines.append(f"[PASS] Best: `{best}`")
+    lines.append(f"[FAIL] Worst: `{worst}`")
 
     top5 = period_stats.get("top5_symbols", [])
     if top5:
@@ -757,8 +757,8 @@ def _build_text_period_report(
 
     lines.append("")
     lines.append("💼 *CAPITAL STATUS*")
-    lines.append(f"Starting: `₹{capital:,.0f}`")
-    lines.append(f"Closing: `₹{closing:,.0f}`")
+    lines.append(f"Starting: `Rs.{capital:,.0f}`")
+    lines.append(f"Closing: `Rs.{closing:,.0f}`")
     lines.append(f"Total Return: `{_pct(roi)}`")
 
     notes = _notes_period(period_stats, label.lower())

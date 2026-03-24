@@ -11,7 +11,7 @@ scan_s2_overreaction()  → tick_store only (day_open, LTP, volume, depth, candl
 
 import datetime
 import numpy as np
-from data_agent import DataAgent
+from agents.data_agent import DataAgent
 from config import *
 
 
@@ -222,7 +222,7 @@ class ScannerAgent:
         Rule 4: Close > Upper Bollinger Band (20, 2) (exhaustion bounce)
         Rule 5: RSI(4) > 82 (extreme short-term overbought)
         Rule 6: 3-day symbol cooldown (no re-entering losers)
-        Rule 7: Minimum ₹100 Cr turnover (liquid names only)
+        Rule 7: Minimum Rs.100 Cr turnover (liquid names only)
         Rule 8: Intraday MIS only (square off at 15:15)
         """
         now = now_ist().time()
@@ -738,7 +738,7 @@ class ScannerAgent:
         3. Price breaks ABOVE ORB high
         4. Price is ABOVE VWAP (VWAP confirmation)
         5. Volume is ≥ 1.3× average daily volume by this time
-        6. Stock is highly liquid (avg turnover > ₹500 Cr)
+        6. Stock is highly liquid (avg turnover > Rs.500 Cr)
 
         Stop: max(VWAP, ORB low, entry - ATR×1.5)
         Target: entry + 2× (entry - stop)

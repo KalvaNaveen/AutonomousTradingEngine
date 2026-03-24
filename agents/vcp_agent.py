@@ -243,4 +243,4 @@ class VCPAgent:
         depths = " → ".join(f"{d:.1f}%" for d in result["contraction_depths"])
         return (f"VCP {result['n_contractions']}c | {depths} | "
                 f"Base {result['base_days']}d | Vol {result['vol_score']:.2f} | "
-                f"Pivot ₹{result['pivot']}")
+                f"Pivot Rs.{result['pivot']}")

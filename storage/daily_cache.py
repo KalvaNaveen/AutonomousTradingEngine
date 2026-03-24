@@ -190,7 +190,7 @@ class DailyCache:
               f"Cache ready: {self._loaded}")
 
         if alert_fn:
-            status = "✅" if loaded > len(universe) * 0.9 else "⚠️"
+            status = "[PASS]" if loaded > len(universe) * 0.9 else "[WARN]"
             alert_fn(f"{status} *DAILY CACHE LOADED*\n"
                      f"`{loaded}` tokens ready | `{failed}` failed")
         return self._loaded

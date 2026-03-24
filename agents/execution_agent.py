@@ -1,10 +1,10 @@
 import datetime
 import requests
 from kiteconnect import KiteConnect
-from risk_agent import RiskAgent
-from journal import Journal
-from state_manager import StateManager
-from fill_monitor import FillMonitor
+from agents.risk_agent import RiskAgent
+from core.journal import Journal
+from core.state_manager import StateManager
+from scripts.fill_monitor import FillMonitor
 from config import *
 
 
@@ -75,7 +75,7 @@ class ExecutionAgent:
                     )
                     trade["partial_oid"] = p_oid
                 except Exception as e:
-                    self.alert(f"⚠️ S1 Re-arm Partial Failed: `{trade['symbol']}`\n`{e}`")
+                    self.alert(f"[WARN] S1 Re-arm Partial Failed: `{trade['symbol']}`\n`{e}`")
 
             # Re-place final target
             try:
@@ -92,7 +92,7 @@ class ExecutionAgent:
                 )
                 trade["target_oid"] = t_oid
             except Exception as e:
-                self.alert(f"⚠️ S1 Re-arm Target Failed: `{trade['symbol']}`\n`{e}`")
+                self.alert(f"[WARN] S1 Re-arm Target Failed: `{trade['symbol']}`\n`{e}`")
 
         # No need to persist state -> OIDs are intraday temporary
         self.alert(f"🔫 *Rearmed exits* for `{len(self.active_trades)}` hold positions.")
@@ -194,7 +194,7 @@ class ExecutionAgent:
                         validity=self.kite.VALIDITY_DAY
                     )
                 except Exception as e2:
-                    self.alert(f"❌ ORDER FAILED: `{signal['symbol']}`\n`{e2}`")
+                    self.alert(f"[FAIL] ORDER FAILED: `{signal['symbol']}`\n`{e2}`")
                     return False
         else:
             # Standard Python path (no Go executor running)
@@ -211,7 +211,7 @@ class ExecutionAgent:
                     validity=self.kite.VALIDITY_DAY
                 )
             except Exception as e:
-                self.alert(f"❌ ORDER FAILED: `{signal['symbol']}`\n`{e}`")
+                self.alert(f"[FAIL] ORDER FAILED: `{signal['symbol']}`\n`{e}`")
                 return False
 
         # SL and target orders are placed ONLY after entry fill confirms.
@@ -264,14 +264,14 @@ class ExecutionAgent:
 
         strat_label = ("S1" if signal["strategy"] == "S1_EMA_DIVERGENCE"
                        else "S2")
-        partial_str = f"₹{partial_price:.2f}" if partial_price else "₹0"
+        partial_str = f"Rs.{partial_price:.2f}" if partial_price else "Rs.0"
         self.alert(
             f"🟢 *EXECUTED {strat_label} — Qty:{qty} | R:R {rr:.2f}*\n"
             f"`{signal['symbol']}` | `{regime}` | `{signal['strategy']}`\n"
-            f"Entry: ₹`{signal['entry_price']:.2f}` | Qty: `{qty}`\n"
+            f"Entry: Rs.`{signal['entry_price']:.2f}` | Qty: `{qty}`\n"
             f"Partial: `{partial_str}`\n"
-            f"Target: ₹`{signal['target_price']:.2f}` | "
-            f"Stop: ₹`{signal['stop_price']:.2f}`\n"
+            f"Target: Rs.`{signal['target_price']:.2f}` | "
+            f"Stop: Rs.`{signal['stop_price']:.2f}`\n"
             f"R:R `{rr:.2f}` | RVOL `{signal.get('rvol', 0):.2f}`\n"
             f"SL + target placed on fill confirmation."
         )
@@ -393,7 +393,7 @@ class ExecutionAgent:
                 validity=self.kite.VALIDITY_DAY
             )
         except Exception as e:
-            self.alert(f"⚠️ FORCE EXIT FAILED: `{trade['symbol']}` — {e}")
+            self.alert(f"[WARN] FORCE EXIT FAILED: `{trade['symbol']}` — {e}")
             return
 
         pnl = self.risk.close_position(oid, trade["entry_price"])
@@ -406,17 +406,17 @@ class ExecutionAgent:
             "exit_time":       now_ist(),
             "daily_pnl_after": self.risk.daily_pnl,
         })
-        streak = (f"\n⚠️ Streak: `{self.risk.consecutive_losses}/3`"
+        streak = (f"\n[WARN] Streak: `{self.risk.consecutive_losses}/3`"
                   if self.risk.consecutive_losses > 0 else "")
         self.alert(
             f"🔴 *FORCE EXIT*\n"
             f"`{trade['symbol']}` | `{reason}`\n"
-            f"Est. PnL: ₹`{pnl:+.0f}`{streak}"
+            f"Est. PnL: Rs.`{pnl:+.0f}`{streak}"
         )
         self.active_trades.pop(oid, None)
 
     def daily_summary_alert(self, regime: str, total_scans: int = 0):
-        from report_agent import build_daily_report
+        from agents.report_agent import build_daily_report
         stats = self.risk.get_daily_stats()
         self.journal.log_daily_summary(
             stats, regime,
@@ -465,19 +465,19 @@ class ExecutionAgent:
         # ── DUPLICATE SYMBOL GUARD ─────────────────────────────────
         for t in self.active_trades.values():
             if t.get("symbol") == sym:
-                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Already holding an open position")
+                self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Already holding an open position")
                 return False, "DUPLICATE_SYMBOL"
 
         # Gate 1: Market Status must be BULL or BULL_WATCH
         mkt = self.state.get_kv("market_status", "BULL")
         if mkt in ("BEAR", "CHOP", "RALLY_ATTEMPT"):
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Market Status `{mkt}`")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Market Status `{mkt}`")
             return False, f"MARKET_{mkt}"
 
         # Gate 2: Stage 2 confirmed
         token = signal.get("token", 0)
         if self._stage_agent and not self._stage_agent.is_stage_2(token):
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Not Stage 2")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Not Stage 2")
             return False, "NOT_STAGE_2"
 
         # Gate 3: EPS growth ≥ 25%
@@ -486,31 +486,31 @@ class ExecutionAgent:
             fund = self._fundamental_agent.get(sym)
         eps_g = fund.get("eps_growth_pct")
         if eps_g is not None and eps_g < S3_MIN_EPS_GROWTH:
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: EPS {eps_g:.0f}% < {S3_MIN_EPS_GROWTH}%")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: EPS {eps_g:.0f}% < {S3_MIN_EPS_GROWTH}%")
             return False, f"EPS_{eps_g:.0f}%"
 
         # Gate 4: EPS accelerating
         if not fund.get("eps_accelerating", True):
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: EPS not accelerating")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: EPS not accelerating")
             return False, "EPS_NOT_ACCEL"
 
         # Gate 5: Sales growth ≥ 20%
         sal_g = fund.get("sales_growth_pct")
         if sal_g is not None and sal_g < S3_MIN_SALES_GROWTH:
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Sales {sal_g:.0f}% < {S3_MIN_SALES_GROWTH}%")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Sales {sal_g:.0f}% < {S3_MIN_SALES_GROWTH}%")
             return False, f"SALES_{sal_g:.0f}%"
 
         # Gate 6: ROE > 17%
         roe = fund.get("roe_pct")
         if roe is not None and roe < S3_MIN_ROE:
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: ROE {roe:.0f}% < {S3_MIN_ROE}%")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: ROE {roe:.0f}% < {S3_MIN_ROE}%")
             return False, f"ROE_{roe:.0f}%"
 
         # Gate 7: VCP ≥ 2 contractions (S3 only)
         if strat == "S3_SEPA_VCP":
             vcp_n = signal.get("vcp_contractions", 0)
             if vcp_n < S3_VCP_MIN_CONTRACTIONS:
-                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: VCP {vcp_n} < {S3_VCP_MIN_CONTRACTIONS}")
+                self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: VCP {vcp_n} < {S3_VCP_MIN_CONTRACTIONS}")
                 return False, f"VCP_{vcp_n}"
 
         # Gate 8: RS score ≥ 70 (S3) or ≥ 80 (S4)
@@ -518,7 +518,7 @@ class ExecutionAgent:
         
         rs_min = S4_MIN_RS_SCORE if strat == "S4_LEADERSHIP" else S3_MIN_RS_SCORE
         if rs < rs_min:
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: RS {rs} < {rs_min}")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: RS {rs} < {rs_min}")
             return False, f"RS_{rs}"
 
         # [v13 Phase 3] Sector Guard (Sit on Hands / Leadership requirement)
@@ -526,22 +526,22 @@ class ExecutionAgent:
             sector = getattr(self, '_symbol_to_sector', {}).get(sym)
             if sector:
                 if self._sector_agent.is_cold(sector):
-                    self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Sector {sector} is COLD")
+                    self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Sector {sector} is COLD")
                     return False, f"COLD_SECTOR_{sector}"
                 if strat == "S4_LEADERSHIP" and not self._sector_agent.is_hot(sector):
-                    self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: S4 requires HOT sector ({sector} is not hot)")
+                    self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: S4 requires HOT sector ({sector} is not hot)")
                     return False, f"NOT_HOT_SECTOR"
 
         # [v13 Phase 3] Earnings Event Guard
         if getattr(self, '_earnings_agent', None):
             if self._earnings_agent.is_earnings_imminent(sym, days=5):
-                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Earnings imminent within 5 days")
+                self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Earnings imminent within 5 days")
                 return False, "EARNINGS_IMMINENT"
 
         # [v14 Phase 4] Global Macro Liquidity Guard
         if getattr(self, '_macro_agent', None):
             if self._macro_agent.is_bearish:
-                self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: MACRO BEARISH (DXY/US10Y high)")
+                self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: MACRO BEARISH (DXY/US10Y high)")
                 return False, "MACRO_BEARISH"
 
         # Gate 9: Stop ≤ 8%
@@ -550,13 +550,13 @@ class ExecutionAgent:
         stop_pct = (entry - stop) / entry if entry > 0 else 1.0
         max_stop = S4_MAX_STOP_PCT if strat == "S4_LEADERSHIP" else S3_MAX_STOP_PCT
         if stop_pct > max_stop:
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Stop {stop_pct*100:.1f}% > {max_stop*100}%")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Stop {stop_pct*100:.1f}% > {max_stop*100}%")
             return False, f"STOP_{stop_pct*100:.1f}%"
 
         # Gate 10: D/E < 0.5
         de = fund.get("debt_equity")
         if de is not None and de > S3_MAX_DEBT_EQUITY:
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: D/E {de:.2f} > {S3_MAX_DEBT_EQUITY}")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: D/E {de:.2f} > {S3_MAX_DEBT_EQUITY}")
             return False, f"DE_{de:.2f}"
 
         # Gate 10.5 (bonus): Superperformance profile
@@ -571,7 +571,7 @@ class ExecutionAgent:
 
         # Gate 11 (bonus): CNC product
         if signal.get("product") != "CNC":
-            self.alert(f"❌ *CHECKLIST REJECT — {sym}*\nGate: Product not CNC")
+            self.alert(f"[FAIL] *CHECKLIST REJECT — {sym}*\nGate: Product not CNC")
             return False, "NOT_CNC"
 
         return True, "ALL_GATES_PASS"
@@ -597,7 +597,7 @@ class ExecutionAgent:
 
         approved, appr_reason = self.risk.approve_trade(signal)
         if not approved:
-            self.alert(f"⚠️ *{strat} BLOCKED*\n`{sym}` — {appr_reason}")
+            self.alert(f"[WARN] *{strat} BLOCKED*\n`{sym}` — {appr_reason}")
             return
 
         qty = self.risk.calculate_position_size(
@@ -625,7 +625,7 @@ class ExecutionAgent:
                 validity=self.kite.VALIDITY_DAY
             )
         except Exception as e:
-            self.alert(f"❌ *{strat} ORDER FAILED*\n`{sym}`: {e}")
+            self.alert(f"[FAIL] *{strat} ORDER FAILED*\n`{sym}`: {e}")
             return
 
         trade = {
@@ -653,9 +653,9 @@ class ExecutionAgent:
         self.risk.register_open(entry_oid, trade)
 
         self.alert(
-            f"✅ *{strat} ENTRY*\n"
-            f"`{sym}` @ ₹`{entry:,.2f}`\n"
-            f"Qty: `{qty}` | Stop: ₹`{stop:,.2f}` | Target: ₹`{target:,.2f}`\n"
+            f"[PASS] *{strat} ENTRY*\n"
+            f"`{sym}` @ Rs.`{entry:,.2f}`\n"
+            f"Qty: `{qty}` | Stop: Rs.`{stop:,.2f}` | Target: Rs.`{target:,.2f}`\n"
             f"RS: `{signal.get('rs_score', 0)}` | Product: CNC"
         )
 
@@ -709,7 +709,7 @@ class ExecutionAgent:
             if gain_pct >= be_pct and trade.get("trail_stop", 0) < entry:
                 trade["trail_stop"] = entry
                 self.state.save(oid, trade)
-                self.alert(f"🟢 *BREAKEVEN* `{sym}` stop → ₹{entry:,.2f}")
+                self.alert(f"🟢 *BREAKEVEN* `{sym}` stop → Rs.{entry:,.2f}")
 
             # ── Partial at +22%/+20% if < 3 weeks ───────────────
             partial_pct = S4_PARTIAL_EXIT_PCT if strat == "S4_LEADERSHIP" else S3_PARTIAL_EXIT_PCT
@@ -733,7 +733,7 @@ class ExecutionAgent:
                             trade["remaining_qty"] = qty - partial_qty
                             self.state.save(oid, trade)
                             self.alert(
-                                f"🟡 *PARTIAL EXIT* `{sym}` 1/3 @ ₹{ltp:,.2f} "
+                                f"🟡 *PARTIAL EXIT* `{sym}` 1/3 @ Rs.{ltp:,.2f} "
                                 f"(+{gain_pct*100:.1f}% in {weeks:.1f}w)"
                             )
                         except Exception as e:
@@ -762,8 +762,8 @@ class ExecutionAgent:
                             trade["entry_high"] = new_pivot  # Track for next
                             self.state.save(oid, trade)
                             self.alert(
-                                f"🟣 *PYRAMID NEW PIVOT* `{sym}` +{add_qty} @ ₹{ltp:,.2f} "
-                                f"(new high ₹{new_pivot:,.2f}, +{gain_pct*100:.1f}%)"
+                                f"🟣 *PYRAMID NEW PIVOT* `{sym}` +{add_qty} @ Rs.{ltp:,.2f} "
+                                f"(new high Rs.{new_pivot:,.2f}, +{gain_pct*100:.1f}%)"
                             )
                         except Exception as e:
                             print(f"[ExecutionAgent] Pyramid error {sym}: {e}")
@@ -815,7 +815,7 @@ class ExecutionAgent:
                 order_type="LIMIT", price=ltp
             )
         except Exception as e:
-            self.alert(f"❌ *{reason} SELL FAILED* `{sym}`: {e}")
+            self.alert(f"[FAIL] *{reason} SELL FAILED* `{sym}`: {e}")
             return
 
         pnl = (ltp - trade["entry_price"]) * qty
@@ -826,6 +826,6 @@ class ExecutionAgent:
 
         self.alert(
             f"🔴 *{reason}* `{sym}`\n"
-            f"Exit @ ₹`{ltp:,.2f}` | PnL: ₹`{pnl:+,.0f}`\n"
+            f"Exit @ Rs.`{ltp:,.2f}` | PnL: Rs.`{pnl:+,.0f}`\n"
             f"Strategy: `{trade['strategy']}`"
         )

@@ -17,7 +17,7 @@ Data fetched (Minervini criteria, NSE India adapted):
   eps_accelerating  — True if last 3 quarters show rising net profit
 
 Schedule: Weekly (Sunday 06:00 AM) via BNFEngine.refresh_fundamentals().
-Cache: SQLite (fundamental_cache table in journal.db), 7-day TTL.
+Cache: SQLite (fundamental_cache table in data/journal.db), 7-day TTL.
 Rate limit: 1.5s between requests (~0.67 req/sec). 160 symbols ≈ 4 minutes.
 Failure mode: Missing symbol excluded from S3/S4 only. S1/S2 unaffected.
 """
@@ -195,8 +195,8 @@ class FundamentalAgent:
             "debt_equity":      None,
             "eps_accelerating": False,
             # [v11] Superperformance Profile fields
-            "market_cap_cr":   None,    # Market cap ₹ Crore
-            "free_float_cr":   None,    # Free float ₹ Crore
+            "market_cap_cr":   None,    # Market cap Rs. Crore
+            "free_float_cr":   None,    # Free float Rs. Crore
             "innovation_flag": False,   # Sales accel > S3_INNOVATION_SALES_ACCEL
         }
         try:
@@ -360,7 +360,7 @@ class FundamentalAgent:
               f"{failed} failed. Ready: {self._loaded}")
 
         if alert_fn:
-            status = "✅" if loaded >= len(symbols) * 0.8 else "⚠️"
+            status = "[PASS]" if loaded >= len(symbols) * 0.8 else "[WARN]"
             alert_fn(
                 f"{status} *FUNDAMENTALS LOADED*\n"
                 f"`{loaded}/{len(symbols)}` symbols | {failed} failed\n"
@@ -419,8 +419,8 @@ class FundamentalAgent:
         Qualifies if ≥ 3 of 4 quantitative criteria pass.
 
         NSE India mappings:
-          1. Market cap ₹300 Cr – ₹5,000 Cr  (mid-cap sweet spot)
-          2. Free float ≥ ₹50 Cr              (institutional interest)
+          1. Market cap Rs.300 Cr – Rs.5,000 Cr  (mid-cap sweet spot)
+          2. Free float ≥ Rs.50 Cr              (institutional interest)
           3. Innovation: sales growth ≥ 80% YoY (new product/market proxy)
           4. EPS accelerating                  (momentum in earnings)
         """
@@ -435,16 +435,16 @@ class FundamentalAgent:
         cap = d.get("market_cap_cr")
         if cap is not None:
             if S3_MIN_MARKET_CAP_CR <= cap <= S3_MAX_MARKET_CAP_CR:
-                score += 1; passed.append(f"Cap:₹{cap:.0f}Cr")
+                score += 1; passed.append(f"Cap:Rs.{cap:.0f}Cr")
             else:
-                failed.append(f"Cap:₹{cap:.0f}Cr")
+                failed.append(f"Cap:Rs.{cap:.0f}Cr")
 
         ff = d.get("free_float_cr")
         if ff is not None:
             if ff >= S3_MIN_FLOAT_CR:
-                score += 1; passed.append(f"Float:₹{ff:.0f}Cr")
+                score += 1; passed.append(f"Float:Rs.{ff:.0f}Cr")
             else:
-                failed.append(f"Float:₹{ff:.0f}Cr_LOW")
+                failed.append(f"Float:Rs.{ff:.0f}Cr_LOW")
 
         if d.get("innovation_flag", False):
             score += 1; passed.append("Innovation")

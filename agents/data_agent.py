@@ -30,13 +30,13 @@ class DataAgent:
     def _sync_nse_universe(self):
         """
         Downloads the latest Nifty LargeMidcap 250 constituents CSV from
-        NSE archives and overwrites `nifty250.csv` locally.  Falls back
+        NSE archives and overwrites `data/nifty250.csv` locally.  Falls back
         silently to the existing file if NSE is unreachable.
         """
         import os
         url = "https://archives.nseindia.com/content/indices/ind_niftylargemidcap250list.csv"
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        csv_path = os.path.join(base_dir, "nifty250.csv")
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        csv_path = os.path.join(base_dir, "data", "nifty250.csv")
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": "Mozilla/5.0",
@@ -49,14 +49,14 @@ class DataAgent:
                     f.write(data)
                 print(f"[DataAgent] Nifty 250 universe synced from NSE ({len(data)} bytes)")
             else:
-                print("[DataAgent] NSE response too small, keeping existing nifty250.csv")
+                print("[DataAgent] NSE response too small, keeping existing data/nifty250.csv")
         except Exception as e:
-            print(f"[DataAgent] NSE sync failed ({e}), using local nifty250.csv fallback")
+            print(f"[DataAgent] NSE sync failed ({e}), using local data/nifty250.csv fallback")
 
     def load_universe(self, alert_fn=None):
         """
         Loads NSE EQ instruments and filters them dynamically to the
-        Nifty LargeMidcap 250 constituents from a local CSV ('nifty250.csv').
+        Nifty LargeMidcap 250 constituents from a local CSV ('data/nifty250.csv').
         """
         import os
         try:
@@ -66,8 +66,8 @@ class DataAgent:
                              (df['segment'] == 'NSE')]
             
             target_list = []
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            csv_path = os.path.join(base_dir, "nifty250.csv")
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            csv_path = os.path.join(base_dir, "data", "nifty250.csv")
             
             if os.path.exists(csv_path):
                 nifty_df = pd.read_csv(csv_path)
@@ -112,7 +112,7 @@ class DataAgent:
             print(f"[DataAgent] Universe loaded: {loaded}/{expected} symbols "
                   f"({len(getattr(self, 'SYMBOL_TO_SECTOR', {}))} mapped to sectors)")
             if expected > 0 and loaded < expected * 0.95:
-                msg = (f"⚠️ *UNIVERSE INCOMPLETE*\n"
+                msg = (f"[WARN] *UNIVERSE INCOMPLETE*\n"
                        f"`{loaded}/{expected}` symbols loaded.\n"
                        f"Missing: `{', '.join(missing_list[:10])}`\n"
                        f"Scans will miss these stocks.")

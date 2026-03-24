@@ -153,7 +153,7 @@ class AutoLogin:
         """Called by scheduler at 8:30 AM."""
         try:
             token = self.login()
-            msg   = (f"✅ *AUTO LOGIN SUCCESS*\n"
+            msg   = (f"[PASS] *AUTO LOGIN SUCCESS*\n"
                      f"Token: `{token[:10]}...`\n"
                      f"Engine armed for 9:30 AM.\n"
                      f"Universe: Nifty 250 | V16")

@@ -7,7 +7,7 @@ Sources:
   NSE: https://www.nseindia.com/api/holiday-master?type=trading
   RBI: Scraped from RBI website policy calendar
 
-Refreshes weekly. Caches to engine_state.db.
+Refreshes weekly. Caches to data/engine_state.db.
 Returns set of date strings: {"2026-02-01", "2026-04-09", ...}
 """
 

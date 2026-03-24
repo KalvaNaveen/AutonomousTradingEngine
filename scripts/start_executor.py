@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 """
 Launch the Go trade executor with environment variables from .env file.
 Run this instead of running trade_executor.exe directly.
