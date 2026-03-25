@@ -20,7 +20,7 @@ What is cached per token:
   upper_circuit     — upper circuit limit (from quote REST)
   lower_circuit     — lower circuit limit (from quote REST)
 
-[v10] Minervini additions:
+[V16] Minervini additions:
   sma50             — 50-day SMA
   sma150            — 150-day SMA
   sma200            — 200-day SMA
@@ -55,7 +55,7 @@ class DailyCache:
         Call at 8:45 AM. Fetches and computes all historical data.
         universe: {token: symbol} dict from DataAgent.UNIVERSE
 
-        [v10] Extended to 260 days for SMA200 + 52-week range.
+        [V16] Extended to 260 days for SMA200 + 52-week range.
         Returns True on success, False if data fetch largely failed.
         """
         print(f"[DailyCache] Preloading {len(universe)} tokens (260d)...")
@@ -76,7 +76,7 @@ class DailyCache:
 
                 ema25    = self._ema(closes, 25)[-1]
                 rsi14    = (self._rsi(closes, 14) or [50.0])[-1]
-                _, _, bb = self._bollinger(closes, 20, 2.0)
+                bb_hi, _, bb = self._bollinger(closes, 20, 2.0)
                 avg_vol  = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else 1.0
                 avg_turn = float(np.mean(
                     [v * c / 1e7 for v, c in zip(volumes[-20:], closes[-20:])]
@@ -84,7 +84,7 @@ class DailyCache:
                 pivot    = self._pivot_support(data)
                 atr14    = self._atr(highs, lows, closes, 14)
 
-                # [v10] Minervini SMA computations
+                # [V16] Minervini SMA computations
                 sma50  = float(np.mean(closes[-50:])) if len(closes) >= 50 else 0.0
                 sma150 = float(np.mean(closes[-150:])) if len(closes) >= 150 else 0.0
                 sma200 = float(np.mean(closes[-200:])) if len(closes) >= 200 else 0.0
@@ -109,13 +109,14 @@ class DailyCache:
                         "ema25":          ema25,
                         "atr14":          round(atr14, 2),
                         "rsi14":          rsi14,
+                        "bb_upper":       bb_hi,
                         "bb_lower":       bb,
                         "avg_daily_vol":  avg_vol,
                         "avg_turnover_cr": avg_turn,
                         "pivot_support":  pivot,
                         "upper_circuit":  0.0,
                         "lower_circuit":  0.0,
-                        # [v10] Minervini fields
+                        # [V16] Minervini fields
                         "sma50":          round(sma50, 2),
                         "sma150":         round(sma150, 2),
                         "sma200":         round(sma200, 2),
@@ -178,7 +179,7 @@ class DailyCache:
         except Exception:
             pass
 
-        # [v10] Compute RS scores cross-sectionally (after all tokens loaded)
+        # [V16] Compute RS scores cross-sectionally (after all tokens loaded)
         self._compute_rs_scores()
 
         # Load circuit breaker limits via REST quote (once at open)
@@ -197,7 +198,7 @@ class DailyCache:
 
     def _compute_rs_scores(self):
         """
-        [v10] Custom RS score: 1–99 percentile rank.
+        [V16] Custom RS score: 1–99 percentile rank.
         Formula: 12m perf × 40% + 3m perf × 30% + 1m perf × 30%
         Ranks all universe tokens against each other. Top 1% = RS 99.
         """
@@ -278,6 +279,10 @@ class DailyCache:
         with self._lock:
             return self._data.get(token, {}).get("rsi14", 50.0)
 
+    def get_bb_upper(self, token: int) -> float:
+        with self._lock:
+            return self._data.get(token, {}).get("bb_upper", 0.0)
+
     def get_bb_lower(self, token: int) -> float:
         with self._lock:
             return self._data.get(token, {}).get("bb_lower", 0.0)
@@ -294,7 +299,7 @@ class DailyCache:
         with self._lock:
             return self._data.get(token, {}).get("pivot_support", 0.0)
 
-    # [v10] Minervini read methods
+    # [V16] Minervini read methods
     def get_sma50(self, token: int) -> float:
         with self._lock:
             return self._data.get(token, {}).get("sma50", 0.0)
@@ -323,7 +328,7 @@ class DailyCache:
         with self._lock:
             return self._data.get(token, {}).get("rs_score", 0)
     def get_atr(self, token: int, period: int = 14) -> float:
-        """[v13] Returns pre-computed ATR. Default period=14."""
+        """[V16] Returns pre-computed ATR. Default period=14."""
         with self._lock:
             return self._data.get(token, {}).get("atr14", 0.0)
 
@@ -417,7 +422,7 @@ class DailyCache:
     def _atr(highs: list, lows: list, closes: list,
              period: int = 14) -> float:
         """
-        [v13] Average True Range.
+        [V16] Average True Range.
         TR = max(H-L, |H-prevC|, |L-prevC|)
         ATR = SMA of TR over `period` days.
         """

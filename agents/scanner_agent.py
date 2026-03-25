@@ -5,8 +5,8 @@ No REST calls during scan loops.
 detect_regime()         → tick_store (VIX LTP, AD ratio) + daily_cache (Nifty EMA)
 scan_s1_ema_divergence() → daily_cache (history/indicators) + tick_store (current price)
 scan_s2_overreaction()  → tick_store only (day_open, LTP, volume, depth, candles)
-[v10] scan_s3_sepa()     → daily_cache + fundamental_agent + stage_agent + vcp_agent
-[v10] scan_s4_leadership() → daily_cache + tick_store (RS + 52w high breakout)
+[V16] scan_s3_sepa()     → daily_cache + fundamental_agent + stage_agent + vcp_agent
+[V16] scan_s4_leadership() → daily_cache + tick_store (RS + 52w high breakout)
 """
 
 import datetime
@@ -23,7 +23,7 @@ class ScannerAgent:
                  sector_agent=None):
         self.data       = data_agent
         self.blackout   = blackout_calendar
-        # [v10/v13] Intelligence layer & Minervini agents
+        # [V16] Intelligence layer & Minervini agents
         self._fundamental = fundamental_agent
         self._stage       = stage_agent
         self._vcp         = vcp_agent
@@ -59,17 +59,25 @@ class ScannerAgent:
             # REST fallback — used pre-market before cache loaded
             hist = self.data.get_daily_ohlcv(NIFTY50_TOKEN, days=60)
             if len(hist) < 30:
+                print(f"[Regime] CHOP — insufficient Nifty history ({len(hist)} bars)")
                 return "CHOP"
             closes    = [d["close"] for d in hist]
             ema_25    = DataAgent.compute_ema(closes, 25)[-1]
+            nifty_ltp = closes[-1]
             above_ema = closes[-1] > ema_25
 
         if vix > VIX_BEAR_PANIC and not above_ema and ad_ratio < 0.40:
+            print(f"[Regime] BEAR_PANIC — VIX={vix:.1f} above_ema={above_ema} AD={ad_ratio:.2f}")
             return "BEAR_PANIC"
-        if VIX_NORMAL_LOW <= vix <= VIX_NORMAL_HIGH:
-            return "NORMAL"
+        # [v16 FIX] Check BULL before NORMAL — BULL requires VIX<18 + above_ema + AD>0.60
+        # Previously NORMAL (VIX 12-22) caught this range first, making BULL unreachable.
         if vix < VIX_BULL_MAX and above_ema and ad_ratio > 0.60:
+            print(f"[Regime] BULL — VIX={vix:.1f} above_ema={above_ema} AD={ad_ratio:.2f}")
             return "BULL"
+        if VIX_NORMAL_LOW <= vix <= VIX_NORMAL_HIGH:
+            print(f"[Regime] NORMAL — VIX={vix:.1f} above_ema={above_ema} AD={ad_ratio:.2f}")
+            return "NORMAL"
+        print(f"[Regime] CHOP — VIX={vix:.1f} above_ema={above_ema} AD={ad_ratio:.2f} nifty_ltp={nifty_ltp:.1f}")
         return "CHOP"
 
     def get_s1_min_deviation(self, regime: str) -> float:
@@ -99,7 +107,7 @@ class ScannerAgent:
 
     def scan_s1_ema_divergence(self, regime: str) -> list:
         """
-        [v15] Connors RSI(4) Pullback System — replaces old EMA divergence.
+        [V16] Connors RSI(4) Pullback System — replaces old EMA divergence.
         High probability mean reversion (65-80% historic win rate).
         Rule 1: Price > 200 SMA (Primary Uptrend)
         Rule 2: Close < Lower Bollinger Band (20, 2) (Deep oversold)
@@ -214,7 +222,7 @@ class ScannerAgent:
 
     def scan_s6_rsi_short(self, regime: str) -> list:
         """
-        [v16] S6: Connors RSI(4) Intraday Exhaustion Short (MIS)
+        [V16] S6: Connors RSI(4) Intraday Exhaustion Short (MIS)
         ELITE: Institutional-grade short selling in confirmed downtrends ONLY.
         Rule 1: Nifty below SMA50 (macro weakness — no shorting in bull markets)
         Rule 2: Price < SMA200 (Primary Downtrend)
@@ -347,7 +355,7 @@ class ScannerAgent:
 
     def scan_s7_rsi_long(self, regime: str) -> list:
         """
-        [v15] S7: Connors RSI(4) Intraday Exhaustion Long (MIS)
+        [V16] S7: Connors RSI(4) Intraday Exhaustion Long (MIS)
         High probability long in primary uptrends (Normal/Bull markets).
         Rule 1: Price > 200 SMA (Primary Uptrend)
         Rule 2: Close < Lower Bollinger Band (20, 2) OR extended
@@ -558,7 +566,7 @@ class ScannerAgent:
                    last["close"] > prev["open"])
         return hammer or engulf
 
-    # ── [v10] S3 SEPA + VCP Scan ──────────────────────────────────────────
+    # ── [V16] S3 SEPA + VCP Scan ──────────────────────────────────────────
 
     def scan_s3_sepa(self) -> list:
         """
@@ -626,7 +634,7 @@ class ScannerAgent:
         """
         S4: Leadership Breakout (CNC momentum swing).
         Runs every ~60s during trading hours (intraday scan).
-        [v15] Regime-adaptive thresholds: BEAR_PANIC=90, BULL=75
+        [V16] Regime-adaptive thresholds: BEAR_PANIC=90, BULL=75
         """
         if not (self.data.daily_cache and self.data.daily_cache.is_loaded()):
             return []
@@ -634,7 +642,7 @@ class ScannerAgent:
         if not ts_ready:
             return []
 
-        # [v15] Regime-adaptive RS threshold
+        # [V16] Regime-adaptive RS threshold
         regime = self._mkt_status.detect() if self._mkt_status else "NORMAL"
         rs_threshold = {
             "EXTREME_PANIC": 95,
@@ -651,7 +659,7 @@ class ScannerAgent:
             if self.data.get_avg_daily_turnover_cr(token) < S4_MIN_TURNOVER_CR:
                 continue
 
-            # ── [v15] Regime-adaptive RS score ─────────────────────────
+            # ── [V16] Regime-adaptive RS score ─────────────────────────
             rs = self.data.daily_cache.get_rs_score(token)
             if rs < rs_threshold:
                 continue
@@ -678,7 +686,7 @@ class ScannerAgent:
             if nifty_ltp > 0 and nifty_open > 0 and stock_open > 0:
                 nifty_chg = (nifty_ltp - nifty_open) / nifty_open
                 stock_chg = (current - stock_open) / stock_open
-                if stock_chg <= nifty_chg * 1.05:  # [v16] 5% outperformance req (was 10%)
+                if stock_chg <= nifty_chg * 1.05:  # [V16] 5% outperformance req (was 10%)
                     continue
 
             # ── Volume confirmation: regime-adaptive ──────────────────
@@ -725,7 +733,7 @@ class ScannerAgent:
 
         return sorted(signals, key=lambda x: x["rs_score"], reverse=True)[:3]
 
-    # ── [v13] S5: VWAP + Opening Range Breakout ─────────────────────
+    # ── [V16] S5: VWAP + Opening Range Breakout ─────────────────────
 
     def scan_s5_vwap_orb(self) -> list:
         """

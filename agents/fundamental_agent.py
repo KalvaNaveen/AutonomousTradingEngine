@@ -32,7 +32,7 @@ from bs4 import BeautifulSoup
 from config import JOURNAL_DB, today_ist, now_ist
 from config import (
     S3_MIN_EPS_GROWTH, S3_MIN_SALES_GROWTH, S3_MIN_ROE, S3_MAX_DEBT_EQUITY,
-    # [v11] Superperformance Profile constants
+    # [V16] Superperformance Profile constants
     S3_MIN_MARKET_CAP_CR, S3_MAX_MARKET_CAP_CR,
     S3_MIN_FLOAT_CR, S3_INNOVATION_SALES_ACCEL,
 )
@@ -149,7 +149,7 @@ class FundamentalAgent:
 
     def _scraper_alert(self, symbol: str, url: str, reason: str):
         """
-        [v12] Fire Telegram alert when screener.in parse fails.
+        [V16] Fire Telegram alert when screener.in parse fails.
         Uses a direct requests call — does not depend on ExecutionAgent.
         Throttled: only one alert per symbol per session (avoids spam on
         batch preload failures). Session flag stored in _scraper_alerted set.
@@ -194,7 +194,7 @@ class FundamentalAgent:
             "roe_pct":          None,
             "debt_equity":      None,
             "eps_accelerating": False,
-            # [v11] Superperformance Profile fields
+            # [V16] Superperformance Profile fields
             "market_cap_cr":   None,    # Market cap Rs. Crore
             "free_float_cr":   None,    # Free float Rs. Crore
             "innovation_flag": False,   # Sales accel > S3_INNOVATION_SALES_ACCEL
@@ -263,7 +263,7 @@ class FundamentalAgent:
                     elif "debt / equity" in label or "d/e" in label:
                         result["debt_equity"] = val
 
-            # ── [v11] top-ratios: market cap + free float ─────────
+            # ── [V16] top-ratios: market cap + free float ─────────
             top_ratios = soup.find("ul", {"id": "top-ratios"})
             if top_ratios:
                 for li in top_ratios.find_all("li"):
@@ -285,7 +285,7 @@ class FundamentalAgent:
                     elif "free float" in lbl or "float" in lbl:
                         result["free_float_cr"] = val
 
-            # ── [v11] Innovation flag ─────────────────────────────────
+            # ── [V16] Innovation flag ─────────────────────────────────
             sal_g = result.get("sales_growth_pct")
             if sal_g is not None and sal_g >= S3_INNOVATION_SALES_ACCEL:
                 result["innovation_flag"] = True
@@ -379,7 +379,7 @@ class FundamentalAgent:
         All Minervini SEPA fundamental criteria. Returns (passes, reason).
         'Miss any = skip trade.' — Minervini
 
-        [v11] EPS acceleration is now a hard gate (was stored but not checked).
+        [V16] EPS acceleration is now a hard gate (was stored but not checked).
         Minervini: "EPS Q1 +20%, Q2 +30%, Q3 +50% — verify acceleration."
         Decelerating earnings = approaching earnings miss = risk of gap-down.
         """
@@ -397,7 +397,7 @@ class FundamentalAgent:
             return False, "EPS_DATA_MISSING"
         if eps_g < S3_MIN_EPS_GROWTH:
             return False, f"EPS_{eps_g:.0f}%<{S3_MIN_EPS_GROWTH}%_MIN"
-        # [v11] Hard gate: EPS must be accelerating quarter-over-quarter
+        # [V16] Hard gate: EPS must be accelerating quarter-over-quarter
         if not eps_accel:
             return False, "EPS_NOT_ACCELERATING"
         if sal_g is not None and sal_g < S3_MIN_SALES_GROWTH:
@@ -411,7 +411,7 @@ class FundamentalAgent:
 
     def is_superperformance_profile(self, symbol: str) -> tuple:
         """
-        [v11] Minervini Superperformance Stock Profile — Traits of 100%+ Winners.
+        [V16] Minervini Superperformance Stock Profile — Traits of 100%+ Winners.
         'Small-mid cap, float 10-100M, new product/market innovation.' — Minervini
 
         Returns (qualifies: bool, summary: str).

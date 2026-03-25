@@ -55,7 +55,7 @@ class StateManager:
                     value TEXT NOT NULL
                 )
             """)
-            # [v10] Minervini columns migration — idempotent ALTER TABLE
+            # [V16] Minervini columns migration — idempotent ALTER TABLE
             for col, col_def in [
                 ("trail_stop",          "REAL DEFAULT 0"),
                 ("pyramid_added",       "INTEGER DEFAULT 0"),
@@ -111,7 +111,7 @@ class StateManager:
                 trade.get("deviation_pct", 0),
                 "OPEN",
                 now,
-                # [v10] Minervini columns
+                # [V16] Minervini columns
                 trade.get("trail_stop", 0),
                 trade.get("pyramid_added", 0),
                 trade.get("rs_score", 0),
@@ -215,7 +215,7 @@ class StateManager:
                 "rvol":           r["rvol"],
                 "deviation_pct":  r["deviation_pct"],
             }
-            # [v10] Minervini columns — graceful for pre-migration rows
+            # [V16] Minervini columns — graceful for pre-migration rows
             try:
                 trade["trail_stop"]        = r["trail_stop"] or 0
                 trade["pyramid_added"]     = r["pyramid_added"] or 0

@@ -46,7 +46,7 @@ class RiskAgent:
                                 regime: str = "NORMAL",
                                 strategy: str = "") -> int:
         """
-        [v13] Volatility-adjusted position sizing.
+        [V16] Volatility-adjusted position sizing.
         Scales risk down in volatile regimes to protect capital.
 
         Regime scaling:

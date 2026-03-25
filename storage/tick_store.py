@@ -49,7 +49,7 @@ class TickStore:
             "_current_candle": None,
             "last_tick_at":    None,   # datetime of last received tick
         })
-        # [v13] VWAP: running cumulative price×volume and cumulative volume
+        # [V16] VWAP: running cumulative price×volume and cumulative volume
         self._vwap = defaultdict(lambda: {
             "cum_pv": 0.0,       # Σ(price × volume)
             "cum_vol": 0,        # Σ(volume)
@@ -57,7 +57,7 @@ class TickStore:
             "sum_sq_dev": 0.0,   # for standard deviation band
             "tick_count": 0,
         })
-        # [v13] ORB: Opening Range high/low (first 15 min: 09:15–09:30)
+        # [V16] ORB: Opening Range high/low (first 15 min: 09:15–09:30)
         self._orb = defaultdict(lambda: {
             "orb_high": 0.0,
             "orb_low":  999999.0,
@@ -115,7 +115,7 @@ class TickStore:
                         "bid_ask_ratio": bq / max(aq, 1),
                     }
 
-                    # [v14] Track depth history for absorption detection (last 60 snapshots)
+                    # [V16] Track depth history for absorption detection (last 60 snapshots)
                     hist = s.get("_depth_history")
                     if hist is None:
                         s["_depth_history"] = []
@@ -124,7 +124,7 @@ class TickStore:
                     if len(hist) > 60:
                         s["_depth_history"] = hist[-60:]
 
-                # [v14] Cumulative Delta: buy_vol - sell_vol (trade-by-trade)
+                # [V16] Cumulative Delta: buy_vol - sell_vol (trade-by-trade)
                 # Kite FULL mode: if trade price >= ask → buyer initiated
                 #                  if trade price <= bid → seller initiated
                 if ltp > 0 and vol > 0:
@@ -142,7 +142,7 @@ class TickStore:
                         cd -= vol       # Seller aggressor (hitting the bid)
                     s["_cum_delta"] = cd
 
-                    # [v14] Large order detection — flag blocks > 5x avg trade size
+                    # [V16] Large order detection — flag blocks > 5x avg trade size
                     avg_size = s.get("_avg_trade_size", vol)
                     trade_count = s.get("_trade_count", 0) + 1
                     avg_size = avg_size + (vol - avg_size) / trade_count  # running average
@@ -150,7 +150,7 @@ class TickStore:
                     s["_trade_count"] = trade_count
                     s["_last_large_order"] = vol > (avg_size * 5) if avg_size > 0 else False
 
-                # [v13] VWAP update — incremental on every tick
+                # [V16] VWAP update — incremental on every tick
                 if ltp > 0 and vol > 0:
                     v = self._vwap[token]
                     v["cum_pv"]  += ltp * vol
@@ -159,7 +159,7 @@ class TickStore:
                         v["vwap"] = v["cum_pv"] / v["cum_vol"]
                     v["tick_count"] += 1
 
-                # [v13] ORB tracking — first 15 minutes
+                # [V16] ORB tracking — first 15 minutes
                 orb = self._orb[token]
                 if not orb["orb_locked"] and ltp > 0:
                     tick_time = ts or now_ist()
@@ -291,7 +291,7 @@ class TickStore:
     def is_ready(self) -> bool:
         return self._ready
 
-    # ── [v13] VWAP + ORB readers ──────────────────────────────────────
+    # ── [V16] VWAP + ORB readers ──────────────────────────────────────
 
     def get_vwap(self, token: int) -> float:
         """Returns current intraday VWAP for a token."""
@@ -322,7 +322,7 @@ class TickStore:
 
     def reset_daily(self):
         """
-        [v13] Reset VWAP and ORB data for a new trading day.
+        [V16] Reset VWAP and ORB data for a new trading day.
         Call at pre_market or after end_of_day.
         """
         with self._lock:

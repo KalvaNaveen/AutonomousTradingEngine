@@ -292,7 +292,7 @@ class MultiTimeframeSimulator:
             
         if is_new_day:
             self._sim_cum_vol = {}
-            # [v16] Reset ORB/VWAP data for the new simulated day
+            # [V16] Reset ORB/VWAP data for the new simulated day
             if self.live_data.tick_store:
                 self.live_data.tick_store.reset_daily()
         
@@ -345,7 +345,7 @@ class MultiTimeframeSimulator:
     # ── 3. Simulation Core ────────────────────────────────────
     def run(self):
         print("=" * 70)
-        print("   BNF ENGINE V16 — TRUE 1:1 INTRA/SWING SIMULATOR (SENIOR TRADER RULES)")
+        print("   BNF Engine V16 — TRUE 1:1 INTRA/SWING SIMULATOR (SENIOR TRADER RULES)")
         print("=" * 70)
         
         # ── 1. Data Fetching Phase ────────────────────────────────
@@ -527,7 +527,7 @@ class MultiTimeframeSimulator:
                             lbl = "Short" if is_short_val else "Long"
                             print(f"  {date_str} {time_str} | {regime:10s} | {sig['strategy']:18s} | {sig['symbol']:10s} | {lbl} Entry: Rs.{sig['entry_price']:.1f}")
                             
-                            # [v16] S6 cooldown tracking for simulator
+                            # [V16] S6 cooldown tracking for simulator
                             if sig["strategy"] == "S6_RSI_SHORT":
                                 if not hasattr(self.scanner, '_s6_cooldown'):
                                     self.scanner._s6_cooldown = {}

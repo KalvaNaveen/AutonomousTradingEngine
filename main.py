@@ -1,5 +1,5 @@
 """
-BNF Engine v12 — 100% Autonomous + WebSocket Tick Engine + Minervini Dual Strategy
+BNF Engine V16 — 100% Autonomous + WebSocket Tick Engine + Minervini Dual Strategy
 Startup sequence:
   8:30 AM  → Auto token refresh (headless Zerodha login)
   8:45 AM  → Blackout calendar refresh + daily cache preload (260d)
@@ -32,7 +32,7 @@ from agents.risk_agent import RiskAgent
 from core.journal import Journal
 from agents.execution_agent import ExecutionAgent
 from kiteconnect import KiteTicker
-# [v10] Minervini agents
+# [V16] Minervini agents
 from agents.fundamental_agent import FundamentalAgent
 from agents.stage_agent import StageAgent
 from agents.vcp_agent import VCPAgent
@@ -68,18 +68,18 @@ class BNFEngine:
         self.scanner      = None
         self.execution    = None
 
-        # [v10] Minervini agents
+        # [V16] Minervini agents
         self.fundamental_agent  = None
         self.stage_agent        = None
         self.vcp_agent          = None
         self.market_status_agent = None
-        self.market_status      = "BULL"   # [v10] Minervini market timing
+        self.market_status      = "BULL"   # [V16] Minervini market timing
 
         self.regime     = "UNKNOWN"
         self.s1_signals = []
         self.token_ok   = False
-        self.scan_count = 0   # [v9] total S1+S2 scan cycles run today
-        self.s5_trade_count = 0   # [v13] S5 intraday trades taken today
+        self.scan_count = 0   # [V16] total S1+S2 scan cycles run today
+        self.s5_trade_count = 0   # [V16] S5 intraday trades taken today
         self._ws_was_fresh = True
 
     def _fetch_live_capital(self, real_kite: KiteConnect) -> float:
@@ -207,7 +207,7 @@ class BNFEngine:
             print(f"[BNFEngine] LIVE MODE — real orders, "
                   f"capital Rs.{self.capital:,.0f}")
 
-        # 10 — [v10] Minervini agents + Phase 3 Intelligence
+        # 10 — [V16] Minervini agents + Phase 3 Intelligence
         self.fundamental_agent   = FundamentalAgent()
         self.stage_agent         = StageAgent(self.daily_cache)
         self.vcp_agent           = VCPAgent(self.daily_cache)
@@ -231,12 +231,12 @@ class BNFEngine:
             stage_agent=self.stage_agent,
             vcp_agent=self.vcp_agent,
             market_status_agent=self.market_status_agent,
-            sector_agent=self.sector_agent,  # [v13] injected
+            sector_agent=self.sector_agent,  # [V16] injected
         )
         self.execution = ExecutionAgent(
             self.kite, self.risk, self.journal, self.state
         )
-        # [v11/v13/v14] Inject agents into execution for master_checklist() and guards
+        # [V16] Inject agents into execution for master_checklist() and guards
         self.execution._stage_agent       = self.stage_agent
         self.execution._fundamental_agent = self.fundamental_agent
         self.execution._sector_agent      = self.sector_agent
@@ -246,7 +246,7 @@ class BNFEngine:
         self.execution._data_universe     = self.data.UNIVERSE
         self.execution._symbol_to_sector  = getattr(self.data, 'SYMBOL_TO_SECTOR', {})
 
-        # [v14] Go Trade Executor bridge — optional, falls back to Python if not running
+        # [V16] Go Trade Executor bridge — optional, falls back to Python if not running
         try:
             from core.go_bridge import GoBridge
             self.go_bridge = GoBridge()
@@ -322,7 +322,7 @@ class BNFEngine:
         # Crash recovery: reload any open positions from yesterday/today
         self.execution.restore_from_state()
 
-        # [v13] Reset VWAP/ORB data for new trading day
+        # [V16] Reset VWAP/ORB data for new trading day
         if self.tick_store:
             self.tick_store.reset_daily()
         self.s5_trade_count = 0
@@ -336,7 +336,7 @@ class BNFEngine:
         universe_count = len(self.data.UNIVERSE) if self.data else 0
         fund_loaded = self.fundamental_agent and self.fundamental_agent.is_loaded()
         self.execution.alert(
-            f"🔔 *BNF ENGINE v12 — ARMED*\n"
+            f"🔔 *BNF Engine V16 — ARMED*\n"
             f"Date: `{today_ist()}`\n"
             f"Regime: `{self.regime}`\n"
             f"Universe: `{universe_count}` symbols\n"
@@ -345,14 +345,14 @@ class BNFEngine:
             f"Fund: `{'[PASS]' if fund_loaded else '[WARN]'}`"
         )
 
-        # [v13] Pre-scan S1 candidates — blocked in CHOP and BEAR_PANIC
+        # [V16] Pre-scan S1 candidates — blocked in CHOP and BEAR_PANIC
         if self.regime not in ("CHOP", "BEAR_PANIC", "EXTREME_PANIC"):
             self.s1_signals = self.scanner.scan_s1_ema_divergence(self.regime)
             print(f"[Engine] S1 scan: {len(self.s1_signals)} signals")
         else:
             print(f"[Engine] {self.regime} regime — S1 blocked (no swing entries)")
 
-        # [v13] S3 SEPA scan — blocked in BEAR_PANIC
+        # [V16] S3 SEPA scan — blocked in BEAR_PANIC
         if self.regime not in ("BEAR_PANIC", "EXTREME_PANIC"):
             s3_signals = self.scanner.scan_s3_sepa()
             print(f"[Engine] S3 SEPA scan: {len(s3_signals)} signals")
@@ -364,7 +364,7 @@ class BNFEngine:
         else:
             print(f"[Engine] {self.regime} — S3 blocked")
 
-        # [v10] Initial market status
+        # [V16] Initial market status
         self._refresh_market_status()
 
         # Re-arm yesterday's hold orders at the exchange
@@ -440,7 +440,7 @@ class BNFEngine:
             if self.daily_cache and self.data:
                 self.daily_cache.refresh_circuit_limits(self.data.UNIVERSE)
 
-        # [v13] S1: Execute pre-scanned signals 9:30–10:00 AM
+        # [V16] S1: Execute pre-scanned signals 9:30–10:00 AM
         # Blocked in CHOP, BEAR_PANIC, EXTREME_PANIC
         if (datetime.time(9, 30) <= now_t <= datetime.time(10, 0) and
                 self.s1_signals and
@@ -452,7 +452,7 @@ class BNFEngine:
 
         # S2: Live scan
         s2_signals = self.scanner.scan_s2_overreaction()
-        self.scan_count += 1   # [v9] count every S2 scan cycle
+        self.scan_count += 1   # [V16] count every S2 scan cycle
 
         for sig in s2_signals:
             if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
@@ -464,7 +464,7 @@ class BNFEngine:
                     self.execution.execute(sig, regime=self.regime)
                     break
 
-        # [v13] S4: Leadership breakout — blocked in BEAR_PANIC
+        # [V16] S4: Leadership breakout — blocked in BEAR_PANIC
         if (datetime.time(9, 30) <= now_t <= datetime.time(15, 0) and
                 self.regime not in ("BEAR_PANIC", "EXTREME_PANIC")):
             s4_signals = self.scanner.scan_s4_leadership()
@@ -473,12 +473,12 @@ class BNFEngine:
                     self.execution.execute_minervini(sig)
                     break   # One S4 entry per tick cycle
 
-        # [v10/v13] Refresh market status and sector momentum every 30 minutes
+        # [V16] Refresh market status and sector momentum every 30 minutes
         if now_ist().minute % 30 == 0:
             self._refresh_market_status()
             self.sector_agent.update()
 
-        # [v13] S5: VWAP+ORB intraday scan (09:45–14:30)
+        # [V16] S5: VWAP+ORB intraday scan (09:45–14:30)
         if (datetime.time(9, 45) <= now_t <= datetime.time(14, 30) and
                 self.s5_trade_count < 3):
             s5_signals = self.scanner.scan_s5_vwap_orb()
@@ -488,23 +488,32 @@ class BNFEngine:
                     ok = self.execution.execute(sig, regime=self.regime)
                     if ok:
                         self.s5_trade_count += 1
-        # [v15] S6/S7: RSI Intraday Scans
-        s6_signals = self.scanner.scan_s6_rsi_short(self.regime)
-        for sig in s6_signals:
-            if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
-                self.execution.execute(sig, regime=self.regime)
-                break
+        # [V16] S6/S7: RSI Intraday Scans
+        try:
+            s6_signals = self.scanner.scan_s6_rsi_short(self.regime)
+            for sig in s6_signals:
+                if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
+                    self.execution.execute(sig, regime=self.regime)
+                    break
+        except Exception as e:
+            print(f"[Engine] S6 scan ERROR: {type(e).__name__}: {e}")
 
-        s7_signals = self.scanner.scan_s7_rsi_long(self.regime)
-        for sig in s7_signals:
-            if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
-                self.execution.execute(sig, regime=self.regime)
-                break
+        try:
+            s7_signals = self.scanner.scan_s7_rsi_long(self.regime)
+            for sig in s7_signals:
+                if len(self.execution.active_trades) < MAX_OPEN_POSITIONS:
+                    self.execution.execute(sig, regime=self.regime)
+                    break
+        except Exception as e:
+            print(f"[Engine] S7 scan ERROR: {type(e).__name__}: {e}")
 
         # Monitor open positions (Kotegawa S1/S2/S5/S6/S7)
-        self.execution.monitor_positions()
+        self.execution.monitor_positions(
+            daily_cache=self.daily_cache,
+            tick_store=self.tick_store
+        )
 
-        # [v10] Monitor Minervini S3/S4 positions
+        # [V16] Monitor Minervini S3/S4 positions
         self.execution.monitor_minervini_positions(
             daily_cache=self.daily_cache,
             tick_store=self.tick_store
@@ -517,8 +526,8 @@ class BNFEngine:
             return
         self.execution.daily_summary_alert(self.regime,
                                             total_scans=self.scan_count)
-        self.scan_count = 0   # [v9] reset daily counter
-        self.s5_trade_count = 0   # [v13] reset S5 daily counter
+        self.scan_count = 0   # [V16] reset daily counter
+        self.s5_trade_count = 0   # [V16] reset S5 daily counter
 
         if PAPER_MODE and hasattr(self.kite, "get_paper_summary"):
             s = self.kite.get_paper_summary()
@@ -528,10 +537,21 @@ class BNFEngine:
                 f"Realised PnL: Rs.`{s['realised_pnl']:+,.2f}`\n"
                 f"Margin deployed: Rs.`{s['capital_deployed']:,.0f}`"
             )
-        self.execution.alert("🔴 *BNF ENGINE v12 — MARKET CLOSED*")
+        self.execution.alert("🔴 *BNF Engine V16 — MARKET CLOSED*")
+
+    def stop_websocket(self):
+        """[V16] Close the websocket connection after market hours to prevent Telegram spam."""
+        if self.ticker:
+            try:
+                self.ticker.close()
+                if self.execution:
+                    self.execution.alert("🔌 *WEBSOCKET DISCONNECTED* — Session complete.")
+                print("[Engine] WebSocket cleanly disconnected at EOD.")
+            except Exception as e:
+                print(f"[Engine] Error closing websocket: {e}")
 
     def update_historical_db(self):
-        """[v16] Automatically append today's EOD data to SQLite history."""
+        """[V16] Automatically append today's EOD data to SQLite history."""
         if not self.execution:
             return
         self.execution.alert("🔄 *EOD DATA UPDATE* — Initiating SQLite historical sync...")
@@ -566,7 +586,7 @@ class BNFEngine:
 
     def weekly_summary(self):
         """
-        [v15] Every Sunday at 16:00 IST.
+        [V16] Every Sunday at 16:00 IST.
         Sends a professional PDF weekly report to Telegram.
         """
         from agents.report_agent import build_weekly_report
@@ -587,7 +607,7 @@ class BNFEngine:
 
     def monthly_summary(self):
         """
-        [v15] 1st of month at 16:00 IST.
+        [V16] 1st of month at 16:00 IST.
         Sends a professional PDF monthly report to Telegram.
         """
         from agents.report_agent import build_monthly_report
@@ -608,7 +628,7 @@ class BNFEngine:
             self.execution.alert(msg)
         print(f"[Engine] Monthly summary sent: {from_date} → {to_date}")
 
-    # [v10] Market status refresh
+    # [V16] Market status refresh
     def _refresh_market_status(self):
         """Called at pre-market and every 30 minutes."""
         if not self.market_status_agent:
@@ -619,7 +639,7 @@ class BNFEngine:
             self.market_status = new_status
         self.state.set_kv("market_status", new_status)
 
-    # [v10] Weekly fundamental refresh
+    # [V16] Weekly fundamental refresh
     def refresh_fundamentals(self):
         """Called Sunday 06:00 AM. Fetches screener.in data for all symbols."""
         if not self.fundamental_agent or not self.data:
@@ -631,7 +651,7 @@ class BNFEngine:
     def run(self):
         from config import PAPER_MODE
         mode = "PAPER" if PAPER_MODE else "LIVE"
-        print(f"[BNF ENGINE v12] Starting. Mode: {mode}. "
+        print(f"[BNF Engine V16] Starting. Mode: {mode}. "
               f"Capital: Rs.{self.capital:,.0f}")
 
         # Schedule all tasks
@@ -641,15 +661,16 @@ class BNFEngine:
         schedule.every().day.at("09:00").do(self.pre_market)
         # tick() is now handled by the precision while loop below
         schedule.every().day.at("15:30").do(self.end_of_day)
+        schedule.every().day.at("15:45").do(self.stop_websocket)
         schedule.every().day.at("15:45").do(self.update_historical_db)
         schedule.every().monday.at("08:00").do(self.refresh_calendar)
-        # [v9] Weekly summary — every Sunday at 16:00 IST
+        # [V16] Weekly summary — every Sunday at 16:00 IST
         schedule.every().sunday.at("16:00").do(self.weekly_summary)
-        # [v9] Monthly summary — every day at 16:00; fires only on 1st of month
+        # [V16] Monthly summary — every day at 16:00; fires only on 1st of month
         schedule.every().day.at("16:00").do(
             lambda: self.monthly_summary() if today_ist().day == 1 else None
         )
-        # [v10] Sunday 06:00 — weekly fundamental data refresh from screener.in
+        # [V16] Sunday 06:00 — weekly fundamental data refresh from screener.in
         schedule.every().sunday.at("06:00").do(self.refresh_fundamentals)
 
         # If engine starts after 8:30 but before market open (recovery scenario)
@@ -672,7 +693,7 @@ class BNFEngine:
         while True:
             schedule.run_pending()
             
-            # [v16] Precision Tick Alignment
+            # [V16] Precision Tick Alignment
             # Run the tick engine exactly at 1 second past every minute (XX:XX:01)
             # This guarantees that the live engine evaluates fully formed, perfectly closed 
             # 1-minute candles, perfectly syncing its decisions with simulator.py!

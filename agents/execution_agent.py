@@ -19,7 +19,7 @@ class ExecutionAgent:
         self.fill_monitor = FillMonitor(kite, state, alert_fn=self.alert)
         self.active_trades = {}
         self.tg_base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-        # [v10/v11] Minervini agents — injected later via _init_kite() in main.py
+        # [V16] Minervini agents — injected later via _init_kite() in main.py
         self._stage_agent       = None
         self._fundamental_agent = None
 
@@ -116,7 +116,7 @@ class ExecutionAgent:
 
         # [v13 Phase 3] "Sit on Hands" Sector Guard for Swing Trades
         strat = signal.get("strategy", "")
-        if strat in ["S1_EMA_DIVERGENCE", "S3_SEPA_VCP", "S4_LEADERSHIP"]:
+        if strat in ["S1_EMA_DIVERGENCE", "S1_RSI_MEAN_REV", "S3_SEPA_VCP", "S4_LEADERSHIP"]:
             if getattr(self, '_sector_agent', None):
                 sector = getattr(self, '_symbol_to_sector', {}).get(sym)
                 if sector and self._sector_agent.is_cold(sector):
@@ -155,16 +155,21 @@ class ExecutionAgent:
         product = (self.kite.PRODUCT_CNC if signal["product"] == "CNC"
                    else self.kite.PRODUCT_MIS)
 
-        # [v14] Route through Go executor if bridge is connected, else Python fallback
+        # [V16] Short selling support: S6_RSI_SHORT signals have is_short=True
+        is_short = signal.get("is_short", False)
+        txn_type = (self.kite.TRANSACTION_TYPE_SELL if is_short
+                    else self.kite.TRANSACTION_TYPE_BUY)
+
+        # [V16] Route through Go executor if bridge is connected, else Python fallback
         go_bridge = getattr(self, '_go_bridge', None)
         if go_bridge and go_bridge.is_connected():
             try:
                 go_signal = {
-                    "action": "BUY",
+                    "action": "SELL" if is_short else "BUY",
                     "symbol": signal["symbol"],
                     "exchange": "NSE",
                     "qty": qty,
-                    "price": round(signal["entry_price"] * 1.002, 1),
+                    "price": round(signal["entry_price"] * (0.998 if is_short else 1.002), 1),
                     "trigger_price": 0,
                     "order_type": "LIMIT",
                     "product": "CNC" if signal["product"] == "CNC" else "MIS",
@@ -186,11 +191,11 @@ class ExecutionAgent:
                         variety=self.kite.VARIETY_REGULAR,
                         exchange=self.kite.EXCHANGE_NSE,
                         tradingsymbol=signal["symbol"],
-                        transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                        transaction_type=txn_type,
                         quantity=qty,
                         product=product,
                         order_type=self.kite.ORDER_TYPE_LIMIT,
-                        price=round(signal["entry_price"] * 1.002, 1),
+                        price=round(signal["entry_price"] * (0.998 if is_short else 1.002), 1),
                         validity=self.kite.VALIDITY_DAY
                     )
                 except Exception as e2:
@@ -203,11 +208,11 @@ class ExecutionAgent:
                     variety=self.kite.VARIETY_REGULAR,
                     exchange=self.kite.EXCHANGE_NSE,
                     tradingsymbol=signal["symbol"],
-                    transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                    transaction_type=txn_type,
                     quantity=qty,
                     product=product,
                     order_type=self.kite.ORDER_TYPE_LIMIT,
-                    price=round(signal["entry_price"] * 1.002, 1),
+                    price=round(signal["entry_price"] * (0.998 if is_short else 1.002), 1),
                     validity=self.kite.VALIDITY_DAY
                 )
             except Exception as e:
@@ -262,8 +267,7 @@ class ExecutionAgent:
         rr = ((signal["target_price"] - signal["entry_price"]) /
               max(signal["entry_price"] - signal["stop_price"], 0.01))
 
-        strat_label = ("S1" if signal["strategy"] == "S1_EMA_DIVERGENCE"
-                       else "S2")
+        strat_label = signal["strategy"].split("_")[0] if "_" in signal["strategy"] else signal["strategy"]
         partial_str = f"Rs.{partial_price:.2f}" if partial_price else "Rs.0"
         self.alert(
             f"🟢 *EXECUTED {strat_label} — Qty:{qty} | R:R {rr:.2f}*\n"
@@ -291,7 +295,7 @@ class ExecutionAgent:
         else:
             self.active_trades[entry_oid] = updated_trade
 
-    def monitor_positions(self):
+    def monitor_positions(self, daily_cache=None, tick_store=None):
         now = now_ist()
 
         # Pre-fetch all current orders ONCE per tick.
@@ -333,14 +337,21 @@ class ExecutionAgent:
                     self._force_exit(oid, trade, "EOD_MIS_SQUAREOFF")
                     continue
 
-            # [v13] S5 VWAP/ORB intraday monitoring
+            # [V16] S5 VWAP/ORB intraday monitoring
             if trade["strategy"] == "S5_VWAP_ORB":
                 # Auto-exit at 15:00 (before exchange 15:15 auto-squareoff)
                 if now.time() >= datetime.time(15, 0):
                     self._force_exit(oid, trade, "S5_EOD_EXIT_15:00")
                     continue
 
-            if trade["strategy"] == "S1_EMA_DIVERGENCE":
+            # [V16] S6/S7 MIS EOD square-off (exit at 15:15, same as S2)
+            if trade["strategy"] in ("S6_RSI_SHORT", "S7_RSI_LONG"):
+                if now.time() >= datetime.time(15, 14):
+                    self._force_exit(oid, trade, "MIS_EOD_SQUAREOFF")
+                    continue
+
+            # S1: Check both old and new strategy name
+            if trade["strategy"] in ("S1_EMA_DIVERGENCE", "S1_RSI_MEAN_REV"):
                 days = (today_ist() - trade["entry_date"].date()
                         if hasattr(trade["entry_date"], "date")
                         else today_ist() - trade["entry_date"]).days
@@ -366,6 +377,30 @@ class ExecutionAgent:
                         self._force_exit(oid, trade, "S1_DAILY_CLOSE_STOP")
                         continue
 
+            # [V16] Parity Fix — S1/S6/S7 Dynamic Oscillator Exits (Like Simulator)
+            if trade["strategy"] in ("S1_RSI_MEAN_REV", "S6_RSI_SHORT", "S7_RSI_LONG"):
+                if daily_cache and tick_store:
+                    token = trade.get("token")
+                    if token:
+                        close_px = tick_store.get_ltp_if_fresh(token)
+                        if close_px > 0:
+                            cache_closes = daily_cache.get_closes(token)
+                            if len(cache_closes) > 0:
+                                live_closes = cache_closes.copy()
+                                live_closes.append(close_px)
+                                from agents import data_agent
+                                rsi_live = (data_agent.DataAgent.compute_rsi(live_closes, S1_RSI_PERIOD) or [50])[-1]
+                                
+                                if trade["strategy"] == "S1_RSI_MEAN_REV" and rsi_live >= S1_RSI_OVERBOUGHT:
+                                    self._force_exit(oid, trade, "S1_RSI_EXIT")
+                                    continue
+                                if trade["strategy"] == "S6_RSI_SHORT" and rsi_live <= S6_RSI_EXIT:
+                                    self._force_exit(oid, trade, "S6_RSI_EXIT")
+                                    continue
+                                if trade["strategy"] == "S7_RSI_LONG" and rsi_live >= 60:
+                                    self._force_exit(oid, trade, "S7_RSI_EXIT")
+                                    continue
+
     def _force_exit(self, oid: str, trade: dict, reason: str):
         for o, v in [
             (trade.get("sl_oid"),      self.kite.VARIETY_SL),
@@ -382,12 +417,17 @@ class ExecutionAgent:
                     else self.kite.PRODUCT_MIS)
         exit_qty = trade.get("remaining_qty", trade["qty"])
 
+        # [V16] Short positions close with BUY, long positions with SELL
+        is_short = trade.get("is_short", False)
+        exit_txn = (self.kite.TRANSACTION_TYPE_BUY if is_short
+                    else self.kite.TRANSACTION_TYPE_SELL)
+
         try:
             self.kite.place_order(
                 variety=self.kite.VARIETY_REGULAR,
                 exchange=self.kite.EXCHANGE_NSE,
                 tradingsymbol=trade["symbol"],
-                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                transaction_type=exit_txn,
                 quantity=exit_qty, product=product,
                 order_type=self.kite.ORDER_TYPE_MARKET,
                 validity=self.kite.VALIDITY_DAY
@@ -451,11 +491,11 @@ class ExecutionAgent:
             except Exception:
                 pass
 
-    # ── [v11] Master Checklist — 10 Minervini Hard Gates ────────────
+    # ── [V16] Master Checklist — 10 Minervini Hard Gates ────────────
 
     def master_checklist(self, signal: dict) -> tuple:
         """
-        [v11] All 10 Minervini gates. Returns (passes: bool, reason: str).
+        [V16] All 10 Minervini gates. Returns (passes: bool, reason: str).
         Called at top of execute_minervini() — blocks before approve_trade().
         Each rejection sends a Telegram alert with specific reason.
         """
@@ -576,12 +616,12 @@ class ExecutionAgent:
 
         return True, "ALL_GATES_PASS"
 
-    # ── [v10] Minervini Entry ───────────────────────────────────────
+    # ── [V16] Minervini Entry ───────────────────────────────────────
 
     def execute_minervini(self, signal: dict):
         """
         S3/S4 entry handler. Trail mode after entry.
-        [v11] master_checklist() called first — blocks before approve_trade().
+        [V16] master_checklist() called first — blocks before approve_trade().
         """
         sym   = signal["symbol"]
         strat = signal["strategy"]
@@ -589,7 +629,7 @@ class ExecutionAgent:
         stop  = signal["stop_price"]
         target = signal["target_price"]
 
-        # [v11] Master checklist — all 10 gates must pass
+        # [V16] Master checklist — all 10 gates must pass
         passes, reason = self.master_checklist(signal)
         if not passes:
             print(f"[ExecutionAgent] {sym} REJECTED by master_checklist: {reason}")
@@ -641,7 +681,7 @@ class ExecutionAgent:
             "remaining_qty":  qty,
             "entry_time":     now,
             "entry_date":     now.date(),
-            # [v10] Minervini-specific fields
+            # [V16] Minervini-specific fields
             "trail_stop":       stop,
             "pyramid_added":    0,
             "rs_score":         signal.get("rs_score", 0),
@@ -659,7 +699,7 @@ class ExecutionAgent:
             f"RS: `{signal.get('rs_score', 0)}` | Product: CNC"
         )
 
-    # ── [v10] Minervini Position Monitor ──────────────────────────
+    # ── [V16] Minervini Position Monitor ──────────────────────────
 
     def monitor_minervini_positions(self, daily_cache=None, tick_store=None):
         """

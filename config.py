@@ -63,7 +63,7 @@ MAX_POSITION_PCT        = 0.20
 NIFTY50_TOKEN       = 256265
 INDIA_VIX_TOKEN     = 264969
 
-# [v13] Phase 3: Sectoral Indices for SectorAgent
+# [V16] Phase 3: Sectoral Indices for SectorAgent
 SECTOR_TOKENS = {
     "NIFTY BANK":   260105,
     "NIFTY IT":     259849,

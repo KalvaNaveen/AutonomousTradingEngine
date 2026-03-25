@@ -90,7 +90,7 @@ class EngineTestSuite:
         self.state       = None
         self.execution   = None
         self.blackout    = None
-        # [v10] Minervini agents
+        # [V16] Minervini agents
         self.fundamental_agent  = None
         self.stage_agent        = None
         self.vcp_agent          = None
@@ -110,7 +110,7 @@ class EngineTestSuite:
 
     def run(self):
         print("=" * 60)
-        print("BNF ENGINE v12 — PAPER AGENT")
+        print("BNF Engine V16 — PAPER AGENT")
         print(f"Live data. Virtual orders. No real money. {TOTAL_TESTS} tests.")
         print("=" * 60 + "\n")
 
@@ -142,19 +142,19 @@ class EngineTestSuite:
         # Tests 14–15: persistence
         self._test_journal_write()
 
-        # Tests 16–21: [v10/v11/v12] Minervini components
+        # Tests 16–21: [V16] Minervini components
         self._test_fundamental_agent()
         self._test_stage_analysis()
         self._test_vcp_detection()
         self._test_market_status_detection()
         self._test_master_checklist()
         
-        # Tests 21-23: [v13] S5 Day Trading & Intelligence Layer guards
+        # Tests 21-23: [V16] S5 Day Trading & Intelligence Layer guards
         self._test_s5_vwap_orb_scan()
         self._test_sector_agent()
         self._test_earnings_agent()
 
-        # Tests 24-26: [v14] Institutional Tier
+        # Tests 24-26: [V16] Institutional Tier
         self._test_macro_agent()
         self._test_order_flow_agent()
         self._test_go_bridge()
@@ -216,7 +216,7 @@ class EngineTestSuite:
         # DataAgent — load universe (instruments REST, once)
         self.data = DataAgent(self.real_kite)
         
-        # [v13] Fast test mode: limit to 30 symbols to avoid 3-min DailyCache preload
+        # [V16] Fast test mode: limit to 30 symbols to avoid 3-min DailyCache preload
         fast_universe = dict(list(self.data.UNIVERSE.items())[:30])
         self.data.UNIVERSE = fast_universe
         print(f"  Universe (Truncated for fast tests): {len(self.data.UNIVERSE)} symbols")
@@ -273,7 +273,7 @@ class EngineTestSuite:
             self.broker, self.risk, self.journal, self.state
         )
 
-        # [v10] Minervini agents
+        # [V16] Minervini agents
         self.fundamental_agent   = FundamentalAgent()
         self.stage_agent         = StageAgent(self.daily_cache)
         self.vcp_agent           = VCPAgent(self.daily_cache)
@@ -281,13 +281,13 @@ class EngineTestSuite:
             self.daily_cache, self.tick_store, NIFTY50_TOKEN
         )
 
-        # [v13] Phase 3 Intelligence Layer
+        # [V16] Phase 3 Intelligence Layer
         self.sector_agent        = SectorAgent(self.daily_cache, self.tick_store)
         self.earnings_agent      = EarningsAgent()
         print("  Preloading earnings calendar...")
         self.earnings_agent.preload(list(self.data.UNIVERSE.values()))
 
-        # [v14] Phase 4 Institutional Layer
+        # [V16] Phase 4 Institutional Layer
         from agents.macro_agent import MacroAgent
         from agents.order_flow_agent import OrderFlowAgent
         self.macro_agent         = MacroAgent()
@@ -799,7 +799,7 @@ class EngineTestSuite:
             except Exception:
                 pass
 
-    # ── Test 16 [v10]: fundamental_agent_scrape ────────────────────────
+    # ── Test 16 [V16]: fundamental_agent_scrape ────────────────────────
 
     def _test_fundamental_agent(self):
         print("\n[16/21] fundamental_agent_scrape ...")
@@ -821,7 +821,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("fundamental_agent_scrape", str(e))
 
-    # ── Test 17 [v10]: stage_analysis ─────────────────────────────────
+    # ── Test 17 [V16]: stage_analysis ─────────────────────────────────
 
     def _test_stage_analysis(self):
         print("\n[17/21] stage_analysis ...")
@@ -837,7 +837,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("stage_analysis", str(e))
 
-    # ── Test 18 [v10]: vcp_detection ──────────────────────────────────
+    # ── Test 18 [V16]: vcp_detection ──────────────────────────────────
 
     def _test_vcp_detection(self):
         print("\n[18/21] vcp_detection ...")
@@ -862,7 +862,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("vcp_detection", str(e))
 
-    # ── Test 19 [v10]: market_status_detection ───────────────────────
+    # ── Test 19 [V16]: market_status_detection ───────────────────────
 
     def _test_market_status_detection(self):
         print("\n[19/21] market_status_detection ...")
@@ -878,7 +878,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("market_status_detection", str(e))
 
-    # ── Test 20 [v11]: master_checklist ──────────────────────────────
+    # ── Test 20 [V16]: master_checklist ──────────────────────────────
 
     def _test_master_checklist(self):
         print("\n[20/21] master_checklist ...")
@@ -902,7 +902,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("master_checklist", str(e))
 
-    # ── Test 21 [v13]: s5_vwap_orb_scan ─────────────────────────────────
+    # ── Test 21 [V16]: s5_vwap_orb_scan ─────────────────────────────────
 
     def _test_s5_vwap_orb_scan(self):
         print("\n[21/27] s5_vwap_orb_scan ...")
@@ -913,7 +913,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("s5_vwap_orb_scan", str(e))
 
-    # ── Test 22 [v13]: sector_agent ─────────────────────────────────────
+    # ── Test 22 [V16]: sector_agent ─────────────────────────────────────
 
     def _test_sector_agent(self):
         print("\n[22/27] sector_agent ...")
@@ -929,7 +929,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("sector_agent", str(e))
 
-    # ── Test 23 [v13]: earnings_agent ───────────────────────────────────
+    # ── Test 23 [V16]: earnings_agent ───────────────────────────────────
 
     def _test_earnings_agent(self):
         print("\n[23/27] earnings_agent ...")
@@ -944,7 +944,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("earnings_agent", str(e))
 
-    # ── Test 24 [v14]: macro_agent ──────────────────────────────────────
+    # ── Test 24 [V16]: macro_agent ──────────────────────────────────────
 
     def _test_macro_agent(self):
         print("\n[24/27] macro_agent ...")
@@ -961,7 +961,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("macro_agent", str(e))
 
-    # ── Test 25 [v14]: order_flow_agent ─────────────────────────────────
+    # ── Test 25 [V16]: order_flow_agent ─────────────────────────────────
 
     def _test_order_flow_agent(self):
         print("\n[25/27] order_flow_agent ...")
@@ -976,7 +976,7 @@ class EngineTestSuite:
         except Exception as e:
             self._fail("order_flow_agent", str(e))
 
-    # ── Test 26 [v14]: go_bridge ────────────────────────────────────────
+    # ── Test 26 [V16]: go_bridge ────────────────────────────────────────
 
     def _test_go_bridge(self):
         print("\n[26/27] go_bridge ...")
@@ -995,7 +995,7 @@ class EngineTestSuite:
             self._pass("go_bridge",
                        f"Bridge test: {e} (optional component)")
 
-    # ── Test 27 [v12]: backtest_minervini ────────────────────────────
+    # ── Test 27 [V16]: backtest_minervini ────────────────────────────
 
     def _test_backtest_minervini(self):
         print("\n[27/27] backtest_minervini ...")
@@ -1012,7 +1012,7 @@ class EngineTestSuite:
 def backtest_minervini(kite: 'KiteConnect', universe: dict,
                        days_back: int = 730) -> dict:
     """
-    [v14] Chunked backtest for Minervini S3/S4 strategy.
+    [V16] Chunked backtest for Minervini S3/S4 strategy.
     
     DEFAULT: 730 days (~2 years) for FAST daily test in paper_agent.py.
     Run manually with days_back=3650 (10 years) for full Minervini validation.
