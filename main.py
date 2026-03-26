@@ -284,8 +284,7 @@ class BNFEngine:
                 f"Reason: NSE holiday or RBI policy day.\n"
                 f"No trades today. Engine will restart tomorrow."
             )
-            import sys
-            sys.exit(0)
+            os._exit(0)  # Hard exit — sys.exit() blocked by WebSocket thread
 
     def preload_cache(self):
         """
@@ -653,6 +652,35 @@ class BNFEngine:
         mode = "PAPER" if PAPER_MODE else "LIVE"
         print(f"[BNF Engine V16] Starting. Mode: {mode}. "
               f"Capital: Rs.{self.capital:,.0f}")
+
+        # ── IMMEDIATE HOLIDAY/WEEKEND CHECK ──────────────────────
+        # Must happen FIRST, before scheduling anything.
+        # Prevents the engine from looping for 15-30 min before discovering
+        # it's a non-trading day.
+        today = today_ist()
+        if today.weekday() >= 5:  # Saturday=5, Sunday=6
+            day_name = "Saturday" if today.weekday() == 5 else "Sunday"
+            self._raw_alert(
+                f"📅 *WEEKEND — ENGINE OFF*\n"
+                f"Date: `{today}`\n"
+                f"Reason: {day_name} — market closed.\n"
+                f"No trades today. Engine will restart on Monday."
+            )
+            print(f"[Engine] {day_name} detected — exiting immediately.")
+            os._exit(0)  # Hard exit — sys.exit() can be blocked by WebSocket threads
+
+        # Check NSE holidays / RBI blackout dates (uses cache if available)
+        if self.blackout.is_blackout():
+            self._raw_alert(
+                f"📅 *BLACKOUT DAY — ENGINE OFF*\n"
+                f"Date: `{today}`\n"
+                f"Reason: NSE holiday or RBI policy day.\n"
+                f"No trades today. Engine will restart tomorrow."
+            )
+            print(f"[Engine] Blackout day detected — exiting immediately.")
+            os._exit(0)  # Hard exit — sys.exit() can be blocked by WebSocket threads
+
+        print(f"[Engine] Trading day confirmed: {today} ({today.strftime('%A')})")
 
         # Schedule all tasks
         schedule.every().day.at("08:30").do(self.auto_token_refresh)
