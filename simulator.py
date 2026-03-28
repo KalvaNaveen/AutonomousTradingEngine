@@ -640,6 +640,14 @@ class MultiTimeframeSimulator:
         self.open_positions.clear()
 
     def _record_trade(self, pos, exit_p, pnl, exit_t, reason):
+        # ── Realistic Simulation Costs ──
+        # Slippage: 0.04% per side
+        # Brokerage: ₹40 flat round-trip
+        # STT: 0.025% on sell side (approx on exit_p)
+        turnover = (pos.entry_price + exit_p) * pos.qty
+        total_costs = (turnover * 0.0004) + 40.0 + (exit_p * pos.qty * 0.00025)
+        pnl -= total_costs
+
         self.current_capital += pnl
         t = {
             "symbol": pos.symbol, "strategy": pos.strategy,
