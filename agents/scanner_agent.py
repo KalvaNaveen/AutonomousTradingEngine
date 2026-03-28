@@ -767,7 +767,8 @@ class ScannerAgent:
                 risk = current - stop_price
                 if risk <= 0:
                     continue
-                if target_price <= current * 1.001:
+                # Ensure minimum RR: if VWAP-to-entry gap < RR*risk, use RR target
+                if (target_price - current) < S6_VWAP_RR * risk:
                     target_price = round(current + S6_VWAP_RR * risk, 2)
                 signals.append({
                     "strategy":     "S6_VWAP_BAND",
@@ -795,7 +796,8 @@ class ScannerAgent:
                 risk = stop_price - current
                 if risk <= 0:
                     continue
-                if target_price >= current * 0.999:
+                # Ensure minimum RR: if entry-to-VWAP gap < RR*risk, use RR target
+                if (current - target_price) < S6_VWAP_RR * risk:
                     target_price = round(current - S6_VWAP_RR * risk, 2)
                 signals.append({
                     "strategy":     "S6_VWAP_BAND",
@@ -982,6 +984,9 @@ class ScannerAgent:
                 # Long: break above R1 + volume spike
                 stop_price   = round(pivot, 2)   # SL: back below pivot
                 target_price = round(r2, 2)       # Target: R2
+                # Sanity guard: r2 must be above current (stock hasn't already blown past it)
+                if target_price <= current or r2 <= r1:
+                    continue
                 risk = current - stop_price
                 if risk <= 0:
                     continue
