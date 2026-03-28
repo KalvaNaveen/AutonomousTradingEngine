@@ -254,6 +254,7 @@ class ExecutionAgent:
                             live_closes = cache_closes.copy()
                             live_closes.append(close_px)
                             from agents import data_agent
+                            # Use S6_RSI_PERIOD if S6, else default to S7's
                             rsi_period = S6_RSI_PERIOD if "S6" in strat else S7_RSI_PERIOD
                             rsi_live = (data_agent.DataAgent.compute_rsi(
                                 live_closes, rsi_period) or [50])[-1]
@@ -266,6 +267,8 @@ class ExecutionAgent:
                             if "S7" in strat and rsi_live >= S7_RSI_EXIT:
                                 self._force_exit(oid, trade, "S7_RSI_EXIT")
                                 continue
+
+
 
     def _force_exit(self, oid: str, trade: dict, reason: str):
         # Cancel any pending orders
@@ -320,6 +323,15 @@ class ExecutionAgent:
             f"Est. PnL: Rs.`{pnl:+.0f}`{streak}"
         )
         self.active_trades.pop(oid, None)
+
+    def flatten_all(self, reason: str = "EOD_FORCED"):
+        """Forcefully square off all active trades."""
+        flattened = 0
+        for oid, trade in list(self.active_trades.items()):
+            self._force_exit(oid, trade, reason)
+            flattened += 1
+        if flattened > 0:
+            self.alert(f"*[flatten_all]* Force exited `{flattened}` positions for reason: `{reason}`")
 
     def daily_summary_alert(self, regime: str, total_scans: int = 0):
         from agents.report_agent import build_daily_report

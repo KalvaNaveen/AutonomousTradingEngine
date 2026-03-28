@@ -122,11 +122,11 @@ class BNFEngine:
         # 2 — Capital
         self.capital = self._fetch_live_capital(real_kite)
 
-        # 3 — RiskAgent
-        self.risk = RiskAgent(self.capital)
-
-        # 4 — DataAgent
+        # 3 — DataAgent
         self.data = DataAgent(real_kite)
+
+        # 4 — RiskAgent (needs data for live VIX checking)
+        self.risk = RiskAgent(self.capital, data_agent=self.data)
 
         # Subscription list
         sub_tokens = (list(self.data.UNIVERSE.keys()) +
@@ -405,6 +405,7 @@ class BNFEngine:
         except Exception as e:
             print(f"[Engine] S6 scan ERROR: {type(e).__name__}: {e}")
 
+
         # ── S4: Index Futures Arbitrage (MD Strategy 4 — FUTURES ONLY) ──
         try:
             s4_signals = self.scanner.scan_s4_arbitrage()
@@ -441,6 +442,7 @@ class BNFEngine:
         except Exception as e:
             print(f"[Engine] S7 scan ERROR: {type(e).__name__}: {e}")
 
+
         # ── S8: Volume Profile + Pivot Breakout (MD Strategy 8) ──
         try:
             s8_signals = self.scanner.scan_s8_vol_pivot(self.regime)
@@ -470,6 +472,13 @@ class BNFEngine:
             daily_cache=self.daily_cache,
             tick_store=self.tick_store
         )
+
+    # ── 15:20 PM: Force EOD Flatten ──────────────────────────────
+    
+    def force_eod_exit(self):
+        if self.execution:
+            print("[Engine] 15:20 EOD FORCED FLATTEN executed.")
+            self.execution.flatten_all("EOD_FORCED")
 
     # ── 15:30 PM: End of day ─────────────────────────────────────
 
@@ -604,6 +613,7 @@ class BNFEngine:
         schedule.every().day.at("08:45").do(self.refresh_calendar)
         schedule.every().day.at("08:45").do(self.preload_cache)
         schedule.every().day.at("09:00").do(self.pre_market)
+        schedule.every().day.at("15:20").do(self.force_eod_exit)
         schedule.every().day.at("15:30").do(self.end_of_day)
         schedule.every().day.at("15:45").do(self.stop_websocket)
         schedule.every().day.at("15:45").do(self.update_historical_db)

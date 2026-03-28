@@ -138,12 +138,13 @@ S6_RSI_ENTRY_LOW        = 55
 S6_RSI_ENTRY_HIGH       = 85
 S6_RSI_EXIT             = 40
 S6_COOLDOWN_DAYS        = 2
-S6_MIN_TURNOVER_CR      = 30        # Lowered from 50 Cr: more symbols qualify in CHOP
-S6_RELATIVE_WEAKNESS    = 0.005     # Lowered from 1%: 0.5% stock/Nifty divergence required
+S6_MIN_TURNOVER_CR      = 30
+S6_RELATIVE_WEAKNESS    = 0.005
 S6_RVOL_MIN             = 1.3
 S6_STOP_PCT             = 0.003
 S6_TARGET_PCT           = 0.005
 S6_VWAP_FILTER          = True
+
 
 # ── S6_VWAP_BAND: VWAP Mean Reversion (MD Strategy 6, lines 140-155) ──
 # Best Regime: Intraday any regime. Timeframe: 5-min.
@@ -163,6 +164,7 @@ S7_RVOL_MIN             = 1.2
 S7_STOP_PCT             = 0.0025
 S7_TARGET_PCT           = 0.005
 S7_ATR_PERIOD           = 14
+
 
 # ── S8: Volume Profile + Pivot Breakout (MD Strategy 8, lines 175-190) ──
 # Best Regime: All (volume confirmation). Timeframe: 15-min/daily.

@@ -25,6 +25,8 @@ import threading
 from kiteconnect import KiteConnect
 from config import TOTAL_CAPITAL
 
+SLIPPAGE_PCT = 0.0004  # 0.04% slippage
+BROKERAGE = 20.0       # Per order flat fee
 
 class PaperBroker:
     """Wraps KiteConnect. Data = real. Orders = virtual."""
@@ -220,10 +222,17 @@ class PaperBroker:
             o = self._orders.get(oid)
             if not o or o["status"] != "OPEN":
                 return
+                
+            # Add explicit slippage
+            if o["transaction_type"] == self.TRANSACTION_TYPE_BUY:
+                exec_price = fill_price * (1 + SLIPPAGE_PCT)
+            else:
+                exec_price = fill_price * (1 - SLIPPAGE_PCT)
+
             o["status"]           = "COMPLETE"
             o["filled_quantity"]  = o["quantity"]
             o["pending_quantity"] = 0
-            o["average_price"]    = fill_price
+            o["average_price"]    = exec_price
 
             sym = o["tradingsymbol"]
             qty = o["quantity"]
@@ -232,16 +241,20 @@ class PaperBroker:
                                         "product": o["product"]}
             pos = self._positions[sym]
 
+            # Flat fee subtracted per fill
+            self.available_margin -= BROKERAGE
+
             if o["transaction_type"] == self.TRANSACTION_TYPE_BUY:
-                total = pos["avg_price"] * pos["qty"] + fill_price * qty
+                total = pos["avg_price"] * pos["qty"] + exec_price * qty
                 pos["qty"] += qty
                 pos["avg_price"] = total / pos["qty"] if pos["qty"] else 0
-                self.available_margin -= fill_price * qty
+                self.available_margin -= exec_price * qty
+                self._realised_pnl -= BROKERAGE
             else:
-                realised = (fill_price - pos["avg_price"]) * qty
-                self._realised_pnl += realised
+                realised = (exec_price - pos["avg_price"]) * qty
+                self._realised_pnl += (realised - BROKERAGE)
                 pos["qty"] -= qty
-                self.available_margin += fill_price * qty
+                self.available_margin += exec_price * qty
                 if pos["qty"] == 0:
                     pos["avg_price"] = 0.0
 

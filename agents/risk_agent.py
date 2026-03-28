@@ -5,18 +5,61 @@ from config import *
 
 class RiskAgent:
 
-    def __init__(self, capital: float):
+    def __init__(self, capital: float, data_agent=None):
         self.capital            = capital
+        self.data               = data_agent
         self.daily_pnl          = 0.0
         self.open_positions     = {}
         self.daily_trades       = []
         self.engine_stopped     = False
         self.stop_reason        = ""
         self.consecutive_losses = 0
+        self.weekly_pnl         = 0.0
 
     def approve_trade(self, signal: dict) -> tuple:
         if self.engine_stopped:
             return False, f"ENGINE_STOPPED: {self.stop_reason}"
+            
+        WEEKLY_DRAWDOWN_PCT = 0.08
+        if self.weekly_pnl <= -(self.capital * WEEKLY_DRAWDOWN_PCT):
+            self.engine_stopped = True
+            self.stop_reason    = "WEEKLY_DRAWDOWN_8%"
+            return False, self.stop_reason
+
+        if self.data and hasattr(self.data, "daily_cache") and self.data.daily_cache:
+            sym_new = signal.get("symbol")
+            if sym_new and len(self.open_positions) > 0:
+                import pandas as pd
+                token_new = None
+                for t, sym in self.data.UNIVERSE.items():
+                    if sym == sym_new:
+                        token_new = t
+                        break
+                
+                if token_new:
+                    closes_new = pd.Series(self.data.daily_cache.get_closes(token_new)[-20:])
+                    if len(closes_new) >= 10:
+                        for pos in self.open_positions.values():
+                            open_sym = pos["symbol"]
+                            token_open = None
+                            for t, sym in self.data.UNIVERSE.items():
+                                if sym == open_sym:
+                                    token_open = t
+                                    break
+                            
+                            if token_open:
+                                closes_open = pd.Series(self.data.daily_cache.get_closes(token_open)[-20:])
+                                if len(closes_open) >= 10:
+                                    min_l = min(len(closes_new), len(closes_open))
+                                    corr = closes_new.iloc[-min_l:].corr(closes_open.iloc[-min_l:])
+                                    if pd.notna(corr) and corr > 0.85:
+                                        return False, f"HIGH_CORR_{corr:.2f}_WITH_{open_sym}"
+
+        if self.data:
+            vix = self.data.get_india_vix()
+            if vix > VIX_EXTREME_STOP:
+                return False, f"VIX_EXTREME_{vix}"
+
         if self.daily_pnl <= -(self.capital * DAILY_LOSS_LIMIT_PCT):
             self.engine_stopped = True
             self.stop_reason    = f"DAILY_LOSS_LIMIT Rs.{abs(self.daily_pnl):.0f}"
