@@ -13,7 +13,7 @@ Usage in execution_agent.py:
     result = bridge.send_order({
         "action": "BUY", "symbol": "RELIANCE", "exchange": "NSE",
         "qty": 100, "order_type": "MARKET", "product": "MIS",
-        "validity": "DAY", "tag": "S5_VWAP"
+        "validity": "DAY", "tag": "S6_TREND"
     })
 """
 

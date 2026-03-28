@@ -123,7 +123,54 @@ class DataAgent:
             print(f"[DataAgent] Universe error: {e}")
             self.UNIVERSE = {}
 
+    def load_futures_tokens(self) -> dict:
+        """
+        [S4 Arbitrage] Dynamically discovers near-month futures contracts
+        for Nifty and BankNifty from Kite NFO instruments.
+
+        Returns: {
+            "NIFTY":     {"token": int, "symbol": str, "expiry": date},
+            "BANKNIFTY": {"token": int, "symbol": str, "expiry": date},
+        }
+        Contract names: e.g. "NIFTY26APR FUT", "BANKNIFTY26APR FUT"
+        Picks the nearest unexpired contract by sorted expiry date.
+        """
+        import datetime as _dt
+        result = {}
+        try:
+            nfo_instruments = self.kite.instruments(exchange="NFO")
+            nfo_df = pd.DataFrame(nfo_instruments)
+            # Filter to index futures only (not options)
+            fut_df = nfo_df[
+                (nfo_df["instrument_type"] == "FUT") &
+                (nfo_df["name"].isin(["NIFTY", "BANKNIFTY"]))
+            ].copy()
+            if fut_df.empty:
+                print("[DataAgent] No NFO futures found")
+                return result
+            # Convert expiry to date and sort
+            fut_df["expiry"] = pd.to_datetime(fut_df["expiry"]).dt.date
+            today = today_ist()
+            # Keep only unexpired contracts, pick nearest expiry per name
+            active = fut_df[fut_df["expiry"] >= today].copy()
+            for name in ["NIFTY", "BANKNIFTY"]:
+                subset = active[active["name"] == name].sort_values("expiry")
+                if subset.empty:
+                    continue
+                row = subset.iloc[0]
+                result[name] = {
+                    "token":  int(row["instrument_token"]),
+                    "symbol": str(row["tradingsymbol"]),
+                    "expiry": row["expiry"],
+                }
+                print(f"[DataAgent] S4 futures loaded: {name} → "
+                      f"{row['tradingsymbol']} expiry={row['expiry']}")
+        except Exception as e:
+            print(f"[DataAgent] load_futures_tokens failed: {e}")
+        return result
+
     def get_daily_ohlcv(self, token: int, days: int = 70) -> list:
+
         """Always REST — historical data not available from WebSocket."""
         try:
             from_date = today_ist() - datetime.timedelta(days=days)
@@ -226,15 +273,20 @@ class DataAgent:
         """
         Intraday volume from tick_store (live, updates every tick).
         Average volume denominator from daily_cache (precomputed at 8:45 AM).
-        Falls back to full REST if neither available.
+        Time-adjusted: Compares current vol against pro-rated daily average.
         """
         if self.tick_store and self.tick_store.is_ready():
             intraday_vol = self.tick_store.get_volume(token)
             if intraday_vol > 0:
                 if self.daily_cache and self.daily_cache.is_loaded():
                     avg_vol = self.daily_cache.get_avg_daily_vol(token)
-                    return intraday_vol / max(avg_vol, 1)
-        # REST fallback
+                    # Time fractionalization
+                    now = now_ist().time()
+                    elapsed = (now.hour - 9) * 60 + now.minute - 15
+                    elapsed = max(1, min(375, elapsed))
+                    pro_rated_avg = avg_vol * (elapsed / 375.0)
+                    return intraday_vol / max(pro_rated_avg, 1)
+        # REST fallback (rarely used intraday)
         try:
             hist = self.get_daily_ohlcv(token, days=30)
             if len(hist) < 5:
@@ -243,7 +295,10 @@ class DataAgent:
             today   = self.get_intraday_ohlcv(token, "60minute")
             if not today:
                 return 0.0
-            return sum(c["volume"] for c in today) / avg_vol if avg_vol else 0.0
+            today_vol = sum(c["volume"] for c in today)
+            now = now_ist().time()
+            elapsed = max(1, min(375, (now.hour - 9) * 60 + now.minute - 15))
+            return today_vol / max(avg_vol * (elapsed / 375.0), 1)
         except Exception:
             return 0.0
 
@@ -354,3 +409,73 @@ class DataAgent:
         m = np.mean(w)
         s = np.std(w)
         return m + sd * s, m, m - sd * s
+
+    @staticmethod
+    def compute_adx(highs: list, lows: list, closes: list,
+                    period: int = 14) -> float:
+        """
+        Average Directional Index (ADX) — MD Strategy 1 requires ADX > 25.
+        Returns the current ADX value (0–100).
+        Trend strength: < 20 = sideways, > 25 = trending, > 40 = strong.
+        """
+        if len(highs) < period + 2:
+            return 0.0
+        # True Range + Directional Movement
+        tr_list, plus_dm, minus_dm = [], [], []
+        for i in range(1, len(highs)):
+            h, l, pc = highs[i], lows[i], closes[i - 1]
+            tr = max(h - l, abs(h - pc), abs(l - pc))
+            tr_list.append(tr)
+            up   = highs[i] - highs[i - 1]
+            down = lows[i - 1] - lows[i]
+            plus_dm.append(up   if up > down and up > 0   else 0.0)
+            minus_dm.append(down if down > up and down > 0 else 0.0)
+        if len(tr_list) < period:
+            return 0.0
+        # Wilder smoothing
+        atr = sum(tr_list[:period])
+        pdm = sum(plus_dm[:period])
+        mdm = sum(minus_dm[:period])
+        dx_list = []
+        for i in range(period, len(tr_list)):
+            atr = atr - atr / period + tr_list[i]
+            pdm = pdm - pdm / period + plus_dm[i]
+            mdm = mdm - mdm / period + minus_dm[i]
+            pdi = 100 * pdm / atr if atr > 0 else 0
+            mdi = 100 * mdm / atr if atr > 0 else 0
+            dx  = 100 * abs(pdi - mdi) / (pdi + mdi) if (pdi + mdi) > 0 else 0
+            dx_list.append(dx)
+        if not dx_list:
+            return 0.0
+        # ADX = smoothed average of DX
+        adx = np.mean(dx_list[-period:])
+        return round(float(adx), 2)
+
+    @staticmethod
+    def compute_macd(prices: list,
+                     fast: int = 12, slow: int = 26,
+                     signal: int = 9) -> tuple:
+        """
+        MACD = EMA(fast) - EMA(slow), Signal = EMA(MACD, signal period).
+        Returns (macd_line, signal_line, histogram).
+        MD Strategy 9: MACD crossover in trend direction for entry.
+        """
+        if len(prices) < slow + signal:
+            return 0.0, 0.0, 0.0
+
+        def _ema(data, n):
+            k   = 2 / (n + 1)
+            ema = [data[0]]
+            for p in data[1:]:
+                ema.append(p * k + ema[-1] * (1 - k))
+            return ema
+
+        ema_fast   = _ema(prices, fast)
+        ema_slow   = _ema(prices, slow)
+        macd_line  = [f - s for f, s in zip(ema_fast, ema_slow)]
+        sig_line   = _ema(macd_line[-signal * 3:], signal)
+        macd_val   = macd_line[-1]
+        signal_val = sig_line[-1]
+        histogram  = macd_val - signal_val
+        return round(macd_val, 4), round(signal_val, 4), round(histogram, 4)
+

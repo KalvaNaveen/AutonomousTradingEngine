@@ -157,18 +157,11 @@ class StateManager:
     def load_open_positions(self) -> list:
         """
         Called at startup. Returns all OPEN positions that may still be active.
-
-        S1 (CNC swing) can be held up to S1_MAX_HOLD_DAYS = 3 nights.
-        Using entry_date >= today would miss Day-2 and Day-3 S1 positions
-        after a crash restart — the engine would have no record of them,
-        would not monitor stops, and would not count them against position limits.
-
-        Fix: look back S1_MAX_HOLD_DAYS days to catch all live swing positions.
-        MIS positions are always same-day so this is harmless for S2.
+        V18: All positions are MIS intraday, so we only need today's positions.
         """
-        from config import S1_MAX_HOLD_DAYS, today_ist
+        from config import today_ist
         cutoff = (today_ist() -
-                  datetime.timedelta(days=S1_MAX_HOLD_DAYS)).isoformat()
+                  datetime.timedelta(days=1)).isoformat()
         with sqlite3.connect(STATE_DB) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""

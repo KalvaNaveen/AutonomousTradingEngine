@@ -1,0 +1,118 @@
+﻿[Test] Kite auth OK
+[DataAgent] Nifty 250 universe synced from NSE (16351 bytes)
+[DataAgent] Universe loaded: 250/250 symbols (179 mapped to sectors)
+======================================================================
+   BNF Engine V19 ΓÇö STRATEGY VALIDATION SUITE
+   Testing 5 days | 50 symbols | NIFTY+BANKNIFTY FUT: NO (run EOD sync first)
+   REST firewall: OFF (REST blocked after load)
+======================================================================
+
+[Test] Loading 50 symbols x 5 days from SQLite...
+[DataAgent] S4 futures loaded: NIFTY ΓåÆ NIFTY26MARFUT expiry=2026-03-30
+[DataAgent] S4 futures loaded: BANKNIFTY ΓåÆ BANKNIFTY26MARFUT expiry=2026-03-30
+[Scanner] S4 futures registered: ['NIFTY26MARFUT', 'BANKNIFTY26MARFUT']
+[Test] S4 futures: ['NIFTY26MARFUT', 'BANKNIFTY26MARFUT']
+[Test] Daily: 54 tokens | Min-stock: 50/50 | Min-fut: 0/2
+
+[Test] Testing 5 trading days from 2026-03-20 to 2026-03-27
+[Regime] CHOP ΓÇö VIX=22.8 AD=0.50
+
+  [2026-03-20] Regime: CHOP
+    14:55 [S1_MA_CROSS ] BAJFINANCE SHORT E:   824.8 SL:   866.8 T:   698.6 RR:3.0
+[Regime] CHOP ΓÇö VIX=25.0 AD=0.50
+
+  [2026-03-23] Regime: CHOP
+    09:20 [S7_MEAN_REV_] HINDALCO   LONG  E:   854.1 SL:   852.0 T:   881.9 RR:13.0
+    09:35 [S1_MA_CROSS ] BERGEPAINT SHORT E:   406.3 SL:   426.6 T:   345.2 RR:3.0
+    09:45 [S1_MA_CROSS ] GICRE      SHORT E:   364.2 SL:   380.3 T:   316.2 RR:3.0
+[Regime] CHOP ΓÇö VIX=24.9 AD=0.50
+
+  [2026-03-24] Regime: CHOP
+    09:30 [S1_MA_CROSS ] FEDERALBNK LONG  E:   261.4 SL:   249.7 T:   296.7 RR:3.0
+    09:35 [S1_MA_CROSS ] FEDERALBNK LONG  E:   260.9 SL:   249.2 T:   296.1 RR:3.0
+    09:40 [S1_MA_CROSS ] FEDERALBNK LONG  E:   260.5 SL:   248.8 T:   295.7 RR:3.0
+    09:45 [S1_MA_CROSS ] GICRE      SHORT E:   357.3 SL:   373.1 T:   309.8 RR:3.0
+    10:05 [S1_MA_CROSS ] CHOLAFIN   SHORT E:  1383.2 SL:  1461.2 T:  1149.3 RR:3.0
+    10:30 [S1_MA_CROSS ] CHOLAFIN   SHORT E:  1379.9 SL:  1457.8 T:  1146.0 RR:3.0
+    11:05 [S1_MA_CROSS ] CRISIL     SHORT E:  3932.1 SL:  4075.1 T:  3503.2 RR:3.0
+    11:10 [S1_MA_CROSS ] CRISIL     SHORT E:  3939.6 SL:  4082.6 T:  3510.7 RR:3.0
+    11:15 [S1_MA_CROSS ] CRISIL     SHORT E:  3944.4 SL:  4087.4 T:  3515.5 RR:3.0
+    13:55 [S1_MA_CROSS ] ADANIENT   SHORT E:  1833.9 SL:  1917.1 T:  1584.4 RR:3.0
+    14:30 [S1_MA_CROSS ] CIPLA      SHORT E:  1225.0 SL:  1261.5 T:  1115.4 RR:3.0
+    14:40 [S1_MA_CROSS ] CIPLA      SHORT E:  1217.9 SL:  1254.4 T:  1108.3 RR:3.0
+    14:45 [S1_MA_CROSS ] CIPLA      SHORT E:  1219.0 SL:  1255.5 T:  1109.4 RR:3.0
+[Regime] CHOP ΓÇö VIX=24.6 AD=0.50
+
+  [2026-03-25] Regime: CHOP
+    14:10 [S6_VWAP_BAND] TIINDIA    SHORT E:  2693.0 SL:  2785.2 T:  2553.2 RR:1.5
+    14:25 [S1_MA_CROSS ] INFY       SHORT E:  1278.9 SL:  1327.5 T:  1133.0 RR:3.0
+    14:35 [S1_MA_CROSS ] CRISIL     SHORT E:  3985.4 SL:  4128.9 T:  3554.8 RR:3.0
+    14:40 [S6_VWAP_BAND] TIINDIA    SHORT E:  2696.2 SL:  2788.4 T:  2555.0 RR:1.5
+    14:45 [S1_MA_CROSS ] CRISIL     SHORT E:  3986.8 SL:  4130.3 T:  3556.2 RR:3.0
+    14:45 [S6_VWAP_BAND] TIINDIA    SHORT E:  2697.0 SL:  2789.2 T:  2555.1 RR:1.5
+[Regime] CHOP ΓÇö VIX=26.8 AD=0.50
+
+  [2026-03-27] Regime: CHOP
+    09:30 [S1_MA_CROSS ] CHOLAFIN   SHORT E:  1433.7 SL:  1510.5 T:  1203.5 RR:3.0
+    09:40 [S1_MA_CROSS ] GRASIM     SHORT E:  2610.9 SL:  2714.6 T:  2299.8 RR:3.0
+    09:55 [S1_MA_CROSS ] CIPLA      SHORT E:  1233.8 SL:  1270.6 T:  1123.5 RR:3.0
+    10:10 [S1_MA_CROSS ] INFY       SHORT E:  1278.5 SL:  1327.5 T:  1131.4 RR:3.0
+    10:15 [S1_MA_CROSS ] BPCL       SHORT E:   281.8 SL:   298.6 T:   231.1 RR:3.0
+    10:25 [S1_MA_CROSS ] HINDZINC   LONG  E:   518.9 SL:   494.8 T:   591.2 RR:3.0
+    10:30 [S1_MA_CROSS ] HINDPETRO  SHORT E:   340.8 SL:   364.3 T:   270.4 RR:3.0
+    13:20 [S1_MA_CROSS ] ABB        LONG  E:  6164.5 SL:  5900.2 T:  6957.5 RR:3.0
+    13:30 [S1_MA_CROSS ] ABB        LONG  E:  6153.0 SL:  5888.7 T:  6946.0 RR:3.0
+    14:15 [S1_MA_CROSS ] HINDPETRO  SHORT E:   342.8 SL:   366.3 T:   272.4 RR:3.0
+    15:00 [S1_MA_CROSS ] BPCL       SHORT E:   282.8 SL:   299.7 T:   232.1 RR:3.0
+
+======================================================================
+   STRATEGY VALIDATION RESULTS
+======================================================================
+Strategy             Status  Sigs  AvgRR Errors  Scans  Notes
+----------------------------------------------------------------------
+S1_MA_CROSS          FAIL     30    3.0      0    345  S1_MA_CROSS: RR 3.00 < MD minimum 3
+                               !! S1_MA_CROSS: RR 3.00 < MD minimum 3.0
+                               !! S1_MA_CROSS: RR 3.00 < MD minimum 3.0
+                               !! S1_MA_CROSS: RR 3.00 < MD minimum 3.0
+S2_BB_MEAN_REV       FAIL      0    0.0      0    345  No signals found across all test da
+                               !! No signals found across all test days
+S3_ORB               FAIL      0    0.0      0    345  S3_ORB: RR 1.23 < MD minimum 2.0
+                               !! S3_ORB: RR 1.23 < MD minimum 2.0
+                               !! S3_ORB: RR 0.90 < MD minimum 2.0
+                               !! S3_ORB: RR 0.98 < MD minimum 2.0
+S4_ARBITRAGE         PASS      0    0.0      0    345  min RR 0.3 OK
+S6_TREND_SHORT       FAIL      0    0.0      0    345  No signals found across all test da
+                               !! No signals found across all test days
+S6_VWAP_BAND         FAIL      3    1.5      0    345  S6_VWAP_BAND: RR 0.16 < MD minimum 
+                               !! S6_VWAP_BAND: RR 0.16 < MD minimum 1.5
+                               !! S6_VWAP_BAND: RR 0.16 < MD minimum 1.5
+                               !! S6_VWAP_BAND: RR 0.15 < MD minimum 1.5
+S7_MEAN_REV_LONG     PASS      1   13.0      0    345  min RR 2.0 OK
+S8_VOL_PIVOT         FAIL      0    0.0      0    345  S8_VOL_PIVOT: SHORT but target(3020
+                               !! S8_VOL_PIVOT: SHORT but target(3020.27) >= entry(2967.2) ΓÇö target must be below entry
+                               !! S8_VOL_PIVOT: RR 0.46 < MD minimum 2.0
+                               !! S8_VOL_PIVOT: SHORT but target(341.15) >= entry(340.8) ΓÇö target must be below entry
+S9_MTF_MOMENTUM      FAIL      0    0.0      0    345  No signals found across all test da
+                               !! No signals found across all test days
+======================================================================
+  OVERALL: SOME STRATEGIES FAILED [!!]
+  Fix the issues above before running live.
+
+--- Signal Distribution (top 5 per strategy) ---
+
+S1_MA_CROSS:
+  2026-03-20 14:55 | BAJFINANCE S | E:824.8 SL:866.8 T:698.6 | RR:3.0
+  2026-03-23 09:35 | BERGEPAINT S | E:406.3 SL:426.6 T:345.2 | RR:3.0
+  2026-03-23 09:45 | GICRE      S | E:364.2 SL:380.3 T:316.2 | RR:3.0
+  2026-03-24 09:30 | FEDERALBNK L | E:261.4 SL:249.7 T:296.7 | RR:3.0
+  2026-03-24 09:35 | FEDERALBNK L | E:260.9 SL:249.2 T:296.1 | RR:3.0
+
+S6_VWAP_BAND:
+  2026-03-25 14:10 | TIINDIA    S | E:2693.0 SL:2785.2 T:2553.2 | RR:1.5
+  2026-03-25 14:40 | TIINDIA    S | E:2696.2 SL:2788.4 T:2555.0 | RR:1.5
+  2026-03-25 14:45 | TIINDIA    S | E:2697.0 SL:2789.2 T:2555.1 | RR:1.5
+
+S7_MEAN_REV_LONG:
+  2026-03-23 09:20 | HINDALCO   L | E:854.1 SL:852.0 T:881.9 | RR:13.0
+
+======================================================================

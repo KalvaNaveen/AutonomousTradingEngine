@@ -31,35 +31,43 @@ class RiskAgent:
             return False, f"DUPLICATE_{signal['symbol']}"
         if signal.get("stop_price", 0) <= 0:
             return False, "NO_STOP_DEFINED"
-        if signal["stop_price"] >= signal["entry_price"]:
-            return False, "STOP_ABOVE_ENTRY"
-        if signal.get("target_price", 0) <= signal["entry_price"]:
-            return False, "TARGET_BELOW_ENTRY"
-        reward = signal["target_price"] - signal["entry_price"]
-        risk   = signal["entry_price"] - signal["stop_price"]
-        rr     = reward / risk if risk > 0 else 0
-        if rr < 1.5:
-            return False, f"RR_{rr:.2f}_BELOW_1.5"
+            
+        is_short = signal.get("is_short", False)
+        if is_short:
+            if signal["stop_price"] <= signal["entry_price"]:
+                return False, "STOP_BELOW_ENTRY_SHORT"
+            if signal.get("target_price", 0) >= signal["entry_price"]:
+                return False, "TARGET_ABOVE_ENTRY_SHORT"
+            reward = signal["entry_price"] - signal["target_price"]
+            risk   = signal["stop_price"] - signal["entry_price"]
+        else:
+            if signal["stop_price"] >= signal["entry_price"]:
+                return False, "STOP_ABOVE_ENTRY"
+            if signal.get("target_price", 0) <= signal["entry_price"]:
+                return False, "TARGET_BELOW_ENTRY"
+            reward = signal["target_price"] - signal["entry_price"]
+            risk   = signal["entry_price"] - signal["stop_price"]
+            
+        rr = reward / risk if risk > 0 else 0
+        if rr < 1.0: # relaxed for shorts and day trades
+            return False, f"RR_{rr:.2f}_BELOW_1.0"
         return True, "APPROVED"
 
     def calculate_position_size(self, entry: float, stop: float,
                                 regime: str = "NORMAL",
                                 strategy: str = "") -> int:
         """
-        [V16] Volatility-adjusted position sizing.
-        Scales risk down in volatile regimes to protect capital.
+        [V18] Volatility-adjusted position sizing for MIS intraday.
+        Risk per trade: 0.75% of capital = Rs.3,750 on Rs.5L.
+        Scales down in volatile regimes.
 
         Regime scaling:
-          BULL       → 100% of MAX_RISK_PER_TRADE_PCT
-          NORMAL     → 100%
-          VOLATILE   → 70%  (reduce exposure when VIX elevated)
-          BEAR_PANIC → 40%  (minimal exposure, only S2 should be trading)
-          EXTREME    → 30%  (survival mode)
-
-        Strategy scaling:
-          S5_VWAP_ORB (MIS) → 50% of max_position (intraday = smaller size)
+          BULL       -> 100%
+          NORMAL     -> 100%
+          CHOP       -> 80%
+          BEAR_PANIC -> 40%
+          EXTREME    -> 30%
         """
-        # Regime-based risk scaling
         regime_scale = {
             "BULL":          1.0,
             "NORMAL":        1.0,
@@ -69,23 +77,15 @@ class RiskAgent:
             "CHOP":          0.80,
         }.get(regime, 1.0)
 
-        # Shave 0.2% from the risk budget to absorb STT (0.1% sell-side on
-        # delivery), brokerage (~0.03% per leg), and typical limit-order
-        # slippage (~0.05%). On a 0.8% S2 stop this is material. On a 7%
-        # S1 stop it is negligible — but correct in both cases.
+        # Absorb STT + brokerage + slippage
         risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * regime_scale * 0.998
-        rps     = entry - stop
+        rps     = abs(entry - stop)
         if rps <= 0:
             return 0
         shares = int(risk_rs / rps)
 
-        # Position cap — smaller for intraday strategies
-        if strategy.startswith("S5"):
-            pos_cap = MAX_POSITION_PCT * 0.50   # 50% max for MIS intraday
-        else:
-            pos_cap = MAX_POSITION_PCT
-
-        cap = int((self.capital * pos_cap) / (entry * 1.001))
+        # Position cap — all MIS intraday
+        cap = int((self.capital * MAX_POSITION_PCT) / (entry * 1.001))
         return min(shares, cap)
 
     def register_open(self, oid: str, pos: dict):

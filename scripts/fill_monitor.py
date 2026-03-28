@@ -154,29 +154,27 @@ class FillMonitor:
         partial_qty   = max(1, actual_qty // 2)
         remaining_qty = actual_qty - partial_qty
 
-        # S2 (MIS intraday): place hard SL-M at exchange — intraday stop is correct.
-        # S1 (CNC swing): DO NOT place exchange SL-M. India's large-caps wick
-        # 1-2% intraday routinely. A hard SL-M will fire on noise before the
-        # daily close confirms the stop is breached. S1 stop is held in memory
-        # and checked at 3:15 PM against the daily closing price. sl_oid stays
-        # None for S1 — monitor_positions() handles it via daily close check.
+        # V18: All strategies are MIS intraday — place SL-M at exchange
+        # for all positions. Intraday hard stop is always correct for MIS.
         new_sl_oid = None
-        if trade.get("strategy") == "S2_OVERREACTION":
-            try:
-                new_sl_oid = self.kite.place_order(
-                    variety=self.kite.VARIETY_SL,
-                    exchange=self.kite.EXCHANGE_NSE,
-                    tradingsymbol=symbol,
-                    transaction_type=self.kite.TRANSACTION_TYPE_SELL,
-                    quantity=actual_qty,
-                    product=product,
-                    order_type=self.kite.ORDER_TYPE_SLM,
-                    trigger_price=round(trade["stop_price"], 1),
-                    validity=self.kite.VALIDITY_DAY
-                )
-            except Exception as e:
-                print(f"[FillMonitor] SL place failed: {e}")
-                new_sl_oid = None
+        is_short = trade.get("is_short", False)
+        sl_txn = (self.kite.TRANSACTION_TYPE_BUY if is_short
+                  else self.kite.TRANSACTION_TYPE_SELL)
+        try:
+            new_sl_oid = self.kite.place_order(
+                variety=self.kite.VARIETY_SL,
+                exchange=self.kite.EXCHANGE_NSE,
+                tradingsymbol=symbol,
+                transaction_type=sl_txn,
+                quantity=actual_qty,
+                product=product,
+                order_type=self.kite.ORDER_TYPE_SLM,
+                trigger_price=round(trade["stop_price"], 1),
+                validity=self.kite.VALIDITY_DAY
+            )
+        except Exception as e:
+            print(f"[FillMonitor] SL place failed: {e}")
+            new_sl_oid = None
 
         # Re-place partial exit
         new_partial_oid = None
