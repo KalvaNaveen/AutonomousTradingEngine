@@ -52,34 +52,28 @@ class RiskAgent:
                     if open_sec == new_sector:
                         return False, f"SECTOR_LIMIT_REACHED_{new_sector}"
 
+        # Robust Portfolio Correlation Logic
         if self.data and hasattr(self.data, "daily_cache") and self.data.daily_cache:
             sym_new = signal.get("symbol")
             if sym_new and len(self.open_positions) > 0:
-                import pandas as pd
-                token_new = None
-                for t, sym in self.data.UNIVERSE.items():
-                    if sym == sym_new:
-                        token_new = t
-                        break
-                
-                if token_new:
-                    closes_new = pd.Series(self.data.daily_cache.get_closes(token_new)[-20:])
-                    if len(closes_new) >= 10:
-                        for pos in self.open_positions.values():
-                            open_sym = pos["symbol"]
-                            token_open = None
-                            for t, sym in self.data.UNIVERSE.items():
-                                if sym == open_sym:
-                                    token_open = t
-                                    break
-                            
-                            if token_open:
-                                closes_open = pd.Series(self.data.daily_cache.get_closes(token_open)[-20:])
-                                if len(closes_open) >= 10:
-                                    min_l = min(len(closes_new), len(closes_open))
-                                    corr = closes_new.iloc[-min_l:].corr(closes_open.iloc[-min_l:])
-                                    if pd.notna(corr) and corr > 0.85:
-                                        return False, f"HIGH_CORR_{corr:.2f}_WITH_{open_sym}"
+                try:
+                    import pandas as pd
+                    token_new = next((t for t, sym in self.data.UNIVERSE.items() if sym == sym_new), None)
+                    if token_new:
+                        closes_new = pd.Series(self.data.daily_cache.get_closes(token_new)[-20:])
+                        if len(closes_new) >= 10:
+                            for pos in self.open_positions.values():
+                                open_sym = pos["symbol"]
+                                token_open = next((t for t, sym in self.data.UNIVERSE.items() if sym == open_sym), None)
+                                if token_open:
+                                    closes_open = pd.Series(self.data.daily_cache.get_closes(token_open)[-20:])
+                                    if len(closes_open) >= 10:
+                                        min_l = min(len(closes_new), len(closes_open))
+                                        corr = closes_new.iloc[-min_l:].corr(closes_open.iloc[-min_l:])
+                                        if pd.notna(corr) and corr > 0.85:
+                                            return False, f"HIGH_CORR_{corr:.2f}_WITH_{open_sym}"
+                except Exception as e:
+                    print(f"[Risk] Correlation Check Error for {sym_new}: {e}")
 
         if self.data:
             vix = self.data.get_india_vix()
@@ -152,7 +146,8 @@ class RiskAgent:
             regime_scale *= 0.6  # Reduce risk implicitly at elevated VIX
 
         # Absorb STT + brokerage + slippage
-        risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * regime_scale * 0.998
+        cost_buffer = 0.997  # explicit margin for slippage + fees + STT
+        risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * regime_scale * cost_buffer
         rps     = abs(entry - stop)
         if rps <= 0:
             return 0

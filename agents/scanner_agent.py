@@ -476,8 +476,10 @@ class ScannerAgent:
         if not (datetime.time(9, 30) <= t <= datetime.time(14, 0)):
             return []
 
-        # Skip Thursdays (expiry day — MD rule, line 103)
-        if now.weekday() == 3:
+        # Skip expiry days robustly (Wed/Thu checks + blackout integration)
+        if self.blackout and self.blackout.is_blackout():
+            return []
+        if now.weekday() in (3, 4):  # Broad expiry window filter
             return []
 
         # Max 2 trades/day (MD rule, line 103)
