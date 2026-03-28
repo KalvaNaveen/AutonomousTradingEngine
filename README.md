@@ -1,12 +1,16 @@
-# BNF Autonomous Trading Engine (V19 – Grok-V7 Final) - 1% Club Edition
+# Autonomous Trading Engine (V19 – Grok-V8 Final) - 1% Club Edition
 
-## Grok-V6 / V7 Final Polish (Mar 28, 2026)
+## Grok-V7 / V8 Final Polish (March 28, 2026)
 
-- Integrated 80/20 Performance Buffers (80% active trading capital, 20% risk reserve)
-- Improved STT + brokerage buffer in position sizing (0.997 factor)
-- Correlation guard remains active (>0.85 blocked)
-- All universal risk rules from original blueprint enforced
-- Simulator now includes realistic costs + buffer logic
+**Key Final Improvements:**
+- Performance Buffers fully integrated (80% Active Trading Capital, 20% Risk Reserve)
+- `RiskAgent` now uses `active_capital` for all sizing and limit checks
+- Explicit `STT_BUFFER = 0.997` for realistic brokerage + STT + slippage
+- Correlation guard and weekly 3-day cooldown remain active
+- All 7 strategies aligned with original Top 10 blueprint
+- Simulator includes realistic costs
+
+**Status**: Production-ready for paper trading → small live deployment.
 
 A 100% autonomous, multi-strategy trading engine for NSE India, leveraging Zerodha Kite. The Grok-V4 build transforms the framework into a deeply diverse, multi-timeframe ecosystem designed for rigorous Institutional-style execution. It completely decouples strategy iteration from operational persistence, featuring strict execution logic, correlation checks, volatility-adjusted position sizing, and exact paper-trading parity.
 

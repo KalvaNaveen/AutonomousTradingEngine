@@ -7,8 +7,8 @@ class RiskAgent:
 
     def __init__(self, capital: float, data_agent=None):
         self.total_capital      = capital
-        self.active_capital     = capital * 0.80          # 80% for trading (V5/V6 buffer)
-        self.risk_reserve       = capital * 0.20          # 20% safety buffer
+        self.active_capital     = capital * ACTIVE_CAPITAL_PCT      # 80% for trading (V5/V6/V7 buffer)
+        self.risk_reserve       = capital * RISK_RESERVE_PCT        # 20% safety buffer
         self.data               = data_agent
         self.daily_pnl          = 0.0
         self.open_positions     = {}
@@ -176,21 +176,25 @@ class RiskAgent:
             "CHOP":          0.80,
         }.get(regime, 1.0)
 
-        # Dynamic Volatility scaling
+        # Dynamic Volatility + Regime scaling
         vix = self.data.get_india_vix() if self.data else 15.0
         if vix > 22.0:
-            regime_scale *= 0.6  # Reduce risk implicitly at elevated VIX
+            regime_scale *= 0.6
 
-        # Explicit STT + Brokerage Buffer
-        # STT_BUFFER defaults to 0.997 mapped in config.py
-        risk_rs = self.active_capital * MAX_RISK_PER_TRADE_PCT * regime_scale * STT_BUFFER
-        rps     = abs(entry - stop)
+        # Use ACTIVE capital + explicit STT buffer
+        risk_rs = (self.active_capital 
+                   * MAX_RISK_PER_TRADE_PCT 
+                   * regime_scale 
+                   * STT_BUFFER)
+
+        rps = abs(entry - stop)
         if rps <= 0:
             return 0
+
         shares = int(risk_rs / rps)
 
-        # Position cap — all MIS intraday
-        cap = int((self.capital * MAX_POSITION_PCT) / (entry * 1.001))
+        # Position cap
+        cap = int((self.active_capital * MAX_POSITION_PCT) / (entry * 1.001))
         return min(shares, cap)
 
     def register_open(self, oid: str, pos: dict):
