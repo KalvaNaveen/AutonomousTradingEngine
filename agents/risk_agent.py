@@ -182,7 +182,7 @@ class RiskAgent:
             regime_scale *= 0.6
 
         # Use ACTIVE capital + explicit STT buffer
-        risk_rs = (self.active_capital 
+        risk_rs = (self.total_capital 
                    * MAX_RISK_PER_TRADE_PCT 
                    * regime_scale 
                    * STT_BUFFER)

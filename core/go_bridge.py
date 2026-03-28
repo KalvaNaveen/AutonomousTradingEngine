@@ -51,7 +51,9 @@ class GoBridge:
                 import subprocess, os
                 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 cwd = os.path.join(base_dir, "go_executor")
-                exe_path = os.path.join(cwd, "trade_executor.exe")
+                import platform
+                ext = ".exe" if platform.system() == "Windows" else ""
+                exe_path = os.path.join(cwd, f"trade_executor{ext}")
                 
                 if os.path.exists(exe_path):
                     subprocess.Popen([exe_path], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

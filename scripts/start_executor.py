@@ -15,7 +15,9 @@ from dotenv import load_dotenv
 # Load .env (same file Python engine uses)
 load_dotenv()
 
-exe_path = os.path.join(os.path.dirname(__file__), "go_executor", "trade_executor.exe")
+import platform
+ext = ".exe" if platform.system() == "Windows" else ""
+exe_path = os.path.join(os.path.dirname(__file__), "go_executor", f"trade_executor{ext}")
 
 if not os.path.exists(exe_path):
     print(f"[Launcher] ERROR: {exe_path} not found. Run 'go build' first.")

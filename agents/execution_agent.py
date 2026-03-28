@@ -150,7 +150,9 @@ class ExecutionAgent:
             spot_exchange = spot_info.get("exchange", "NSE")
             spot_symbol   = spot_info.get("symbol", "")
             # Only NIFTYBEES or equivalent ETF — not the index itself
-            if "SPOT" not in spot_symbol:   # guard: don't try to buy an index
+            if "SPOT" in spot_symbol:
+                pass  # Can't trade an index directly
+            else:
                 try:
                     self.kite.place_order(
                         variety=self.kite.VARIETY_REGULAR,

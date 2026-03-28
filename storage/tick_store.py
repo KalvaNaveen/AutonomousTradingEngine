@@ -328,3 +328,10 @@ class TickStore:
         with self._lock:
             self._vwap.clear()
             self._orb.clear()
+            for s in self._store.values():
+                s["day_open"] = 0.0
+                s["day_high"] = 0.0
+                s["day_low"]  = 0.0
+                s["volume"]   = 0
+                s["candles_5min"] = []
+                s["_current_candle"] = None

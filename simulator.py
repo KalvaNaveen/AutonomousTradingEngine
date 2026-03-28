@@ -240,12 +240,18 @@ class MultiTimeframeSimulator:
                 return bars[self.idx-1]["low"] if self.idx > 0 and len(bars)>0 else 0.0
             def get_atr(self, token, period=14):
                 bars = self.hist.get(token, [])
-                if self.idx < 14 or not bars: return 0.0
-                return np.mean([b["high"] - b["low"] for b in bars[max(0, self.idx-14):self.idx]])
+                bars_slc = bars[max(0, self.idx-period-1):self.idx]
+                if len(bars_slc) < 2: return 0.0
+                trs = []
+                for i in range(1, len(bars_slc)):
+                    h, l, pc = bars_slc[i]["high"], bars_slc[i]["low"], bars_slc[i-1]["close"]
+                    trs.append(max(h-l, abs(h-pc), abs(l-pc)))
+                return float(np.mean(trs[-period:])) if trs else 0.0
             def get_avg_daily_vol(self, token):
                 bars = self.hist.get(token, [])
-                if self.idx < 20 or not bars: return 0.0
-                return np.mean([b["volume"] for b in bars[max(0, self.idx-20):self.idx]])
+                slc = bars[max(0, self.idx-20):self.idx]
+                if not slc: return 0.0
+                return np.mean([b["volume"] for b in slc])
             def _closes(self, token):
                 return [b["close"] for b in self.hist.get(token, [])[:self.idx]]
             def get_sma50(self, token):
@@ -718,7 +724,7 @@ class MultiTimeframeSimulator:
             print(f"\n[Simulator] PDF report failed: {e}")
             try:
                 msg = (
-                    "*V18 SIMULATOR COMPLETE*\n"
+                    "*V19 SIMULATOR COMPLETE*\n"
                     f"Days: `{self.days_back}` | Symbols: `{self.top_n}`\n\n"
                     f"Trades: `{len(self.trades)}`\n"
                     f"Win Rate: `{wr:.1f}%`\n"

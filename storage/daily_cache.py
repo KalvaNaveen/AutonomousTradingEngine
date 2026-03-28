@@ -427,6 +427,8 @@ class DailyCache:
         TR = max(H-L, |H-prevC|, |L-prevC|)
         ATR = SMA of TR over `period` days.
         """
+        if not highs or len(highs) == 0:
+            return 0.0
         if len(highs) < period + 1:
             # Fallback: simple H-L range
             return float(np.mean([h - l for h, l in zip(highs[-period:], lows[-period:])]))

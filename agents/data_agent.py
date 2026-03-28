@@ -453,6 +453,21 @@ class DataAgent:
         return round(float(adx), 2)
 
     @staticmethod
+    def _compute_macd_line(prices: list, fast: int = 12, slow: int = 26) -> list:
+        """Returns the full macd_line series."""
+        if len(prices) < slow:
+            return []
+        def _ema(data, n):
+            k   = 2 / (n + 1)
+            ema = [data[0]]
+            for p in data[1:]:
+                ema.append(p * k + ema[-1] * (1 - k))
+            return ema
+        ema_fast   = _ema(prices, fast)
+        ema_slow   = _ema(prices, slow)
+        return [f - s for f, s in zip(ema_fast, ema_slow)]
+
+    @staticmethod
     def compute_macd(prices: list,
                      fast: int = 12, slow: int = 26,
                      signal: int = 9) -> tuple:
