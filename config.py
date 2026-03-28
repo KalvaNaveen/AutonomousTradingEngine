@@ -190,14 +190,15 @@ S9_RR                   = 3.0       # Target: 1:3 RR
 # Entry: Long futures + short cash (or vice versa) when mispricing > 0.15%
 # Exit: Convergence (0.05% profit) or max 30-min hold.
 # Risk: Near-zero (hedged). Max 2% capital exposure.
-S4_MISPRINT_ENTRY_PCT   = 0.0015    # Enter when futures/spot diff > 0.15%
-S4_MISPRINT_EXIT_PCT    = 0.0005    # Exit when converged to within 0.05%
-S4_MAX_HOLD_MINS        = 30        # Max hold 30 minutes (MD rule, line 117)
-S4_RISK_PCT             = 0.02      # Max 2% capital exposure (MD rule, line 118)
-S4_RISK_FREE_RATE       = 0.065     # RBI repo rate approx 6.5% for fair value calc
+# COMMENTED BY USER REQUEST:
+# S4_MISPRINT_ENTRY_PCT   = 0.0015    # Enter when futures/spot diff > 0.15%
+# S4_MISPRINT_EXIT_PCT    = 0.0005    # Exit when converged to within 0.05%
+# S4_MAX_HOLD_MINS        = 30        # Max hold 30 minutes (MD rule, line 117)
+# S4_RISK_PCT             = 0.02      # Max 2% capital exposure (MD rule, line 118)
+# S4_RISK_FREE_RATE       = 0.065     # RBI repo rate approx 6.5% for fair value calc
 # Instruments: Nifty and BankNifty index + their near-month futures
-S4_SPOT_TOKEN           = 256265    # NIFTY50 (same as NIFTY50_TOKEN)
-BANKNIFTY_SPOT_TOKEN    = 260105    # NIFTY BANK index token
+# S4_SPOT_TOKEN           = 256265    # NIFTY50 (same as NIFTY50_TOKEN)
+# BANKNIFTY_SPOT_TOKEN    = 260105    # NIFTY BANK index token
 
 
 # Based on adaptive intraday system research:

@@ -127,47 +127,9 @@ class DataAgent:
         """
         [S4 Arbitrage] Dynamically discovers near-month futures contracts
         for Nifty and BankNifty from Kite NFO instruments.
-
-        Returns: {
-            "NIFTY":     {"token": int, "symbol": str, "expiry": date},
-            "BANKNIFTY": {"token": int, "symbol": str, "expiry": date},
-        }
-        Contract names: e.g. "NIFTY26APR FUT", "BANKNIFTY26APR FUT"
-        Picks the nearest unexpired contract by sorted expiry date.
+        COMMENTED OUT PURSUANT TO USER REQUEST - FUTURES DISABLED.
         """
-        import datetime as _dt
-        result = {}
-        try:
-            nfo_instruments = self.kite.instruments(exchange="NFO")
-            nfo_df = pd.DataFrame(nfo_instruments)
-            # Filter to index futures only (not options)
-            fut_df = nfo_df[
-                (nfo_df["instrument_type"] == "FUT") &
-                (nfo_df["name"].isin(["NIFTY", "BANKNIFTY"]))
-            ].copy()
-            if fut_df.empty:
-                print("[DataAgent] No NFO futures found")
-                return result
-            # Convert expiry to date and sort
-            fut_df["expiry"] = pd.to_datetime(fut_df["expiry"]).dt.date
-            today = today_ist()
-            # Keep only unexpired contracts, pick nearest expiry per name
-            active = fut_df[fut_df["expiry"] >= today].copy()
-            for name in ["NIFTY", "BANKNIFTY"]:
-                subset = active[active["name"] == name].sort_values("expiry")
-                if subset.empty:
-                    continue
-                row = subset.iloc[0]
-                result[name] = {
-                    "token":  int(row["instrument_token"]),
-                    "symbol": str(row["tradingsymbol"]),
-                    "expiry": row["expiry"],
-                }
-                print(f"[DataAgent] S4 futures loaded: {name} → "
-                      f"{row['tradingsymbol']} expiry={row['expiry']}")
-        except Exception as e:
-            print(f"[DataAgent] load_futures_tokens failed: {e}")
-        return result
+        return {}
 
     def get_daily_ohlcv(self, token: int, days: int = 70) -> list:
 

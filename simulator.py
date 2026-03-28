@@ -136,18 +136,19 @@ class MultiTimeframeSimulator:
         print(f"\n[Simulator] Loading {len(self.universe)} symbols x {self.days_back} days from SQLite DB...")
 
         # 1. Discover S4 futures tokens from Kite (FUTURES ONLY — no options)
-        try:
-            self.futures_map = self.live_data.load_futures_tokens()
-            if self.futures_map:
-                fut_tokens = list(self.futures_map.keys())
-                print(f"[Simulator] S4 futures discovered: "
-                      f"{[v['symbol'] for v in self.futures_map.values()]}")
-                self.scanner.set_futures_tokens(self.futures_map)
-            else:
-                print("[Simulator] S4: No futures tokens — arb scan will be skipped.")
-        except Exception as e:
-            print(f"[Simulator] S4 futures discovery failed: {e}")
-            self.futures_map = {}
+        # COMMENTED OUT PER USER REQUEST
+        # try:
+        #     self.futures_map = self.live_data.load_futures_tokens()
+        #     if self.futures_map:
+        #         fut_tokens = list(self.futures_map.keys())
+        #         print(f"[Simulator] S4 futures discovered: "
+        #               f"{[v['symbol'] for v in self.futures_map.values()]}")
+        #         self.scanner.set_futures_tokens(self.futures_map)
+        #     else:
+        #         print("[Simulator] S4: No futures tokens — arb scan will be skipped.")
+        # except Exception as e:
+        #     print(f"[Simulator] S4 futures discovery failed: {e}")
+        self.futures_map = {}
 
         # 2. Load Daily Data (stocks + index + futures)
         fut_daily_tokens = list(self.futures_map.keys()) if self.futures_map else []

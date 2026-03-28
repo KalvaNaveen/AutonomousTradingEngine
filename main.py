@@ -192,21 +192,21 @@ class BNFEngine:
         self.scanner = ScannerAgent(self.data, self.blackout)
 
         # 11 — S4: Load index futures tokens (FUTURES ONLY — no options)
-        #       DataAgent.load_futures_tokens() already filters instrument_type == FUT
-        futures_map = self.data.load_futures_tokens()
-        if futures_map:
-            # Subscribe futures tokens to existing WebSocket
-            fut_tokens = [v["token"] for v in futures_map.values()]
-            try:
-                self.ticker.subscribe(fut_tokens)
-                self.ticker.set_mode(self.ticker.MODE_FULL, fut_tokens)
-                print(f"[BNFEngine] S4 futures subscribed: "
-                      f"{[v['symbol'] for v in futures_map.values()]}")
-            except Exception as e:
-                print(f"[BNFEngine] S4 futures subscription failed: {e}")
-            self.scanner.set_futures_tokens(futures_map)
-        else:
-            print("[BNFEngine] S4: No futures tokens loaded — arbitrage disabled today")
+        # COMMENTED OUT PER USER REQUEST: Futures totally disabled.
+        # futures_map = self.data.load_futures_tokens()
+        # if futures_map:
+        #     # Subscribe futures tokens to existing WebSocket
+        #     fut_tokens = [v["token"] for v in futures_map.values()]
+        #     try:
+        #         self.ticker.subscribe(fut_tokens)
+        #         self.ticker.set_mode(self.ticker.MODE_FULL, fut_tokens)
+        #         print(f"[BNFEngine] S4 futures subscribed: "
+        #               f"{[v['symbol'] for v in futures_map.values()]}")
+        #     except Exception as e:
+        #         print(f"[BNFEngine] S4 futures subscription failed: {e}")
+        #     self.scanner.set_futures_tokens(futures_map)
+        # else:
+        #     print("[BNFEngine] S4: No futures tokens loaded — arbitrage disabled today")
 
         # 12 — ExecutionAgent
         self.execution = ExecutionAgent(
