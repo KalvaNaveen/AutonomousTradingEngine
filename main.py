@@ -306,7 +306,20 @@ class BNFEngine:
     def _tick_inner(self):
         if not self.token_ok or not self.execution:
             return
+        
+        # ── KILL SWITCH GUARD ──
         if self.risk.engine_stopped:
+            if len(self.execution.active_trades) > 0:
+                if not getattr(self, '_stop_flattened', False):
+                    self.execution.alert(f"*ENGINE STOPPED*: `{self.risk.stop_reason}` - Flattening all active trades instantly!")
+                    self.execution.flatten_all(f"KILL_SWITCH: {self.risk.stop_reason}")
+                    self._stop_flattened = True
+                
+                # We must continue monitoring positions until they are successfully cleared
+                self.execution.monitor_positions(
+                    daily_cache=self.daily_cache,
+                    tick_store=self.tick_store
+                )
             return
 
         # WebSocket health check
