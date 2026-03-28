@@ -7,6 +7,7 @@ class RiskAgent:
 
     def __init__(self, capital: float, data_agent=None):
         self.capital            = capital
+        self.active_capital     = capital * 0.8  # Grok-V5: 80% Active / 20% Reserve
         self.data               = data_agent
         self.daily_pnl          = 0.0
         self.open_positions     = {}
@@ -15,6 +16,8 @@ class RiskAgent:
         self.stop_reason        = ""
         self.consecutive_losses = 0
         self.weekly_pnl         = 0.0
+        self._corr_series_cache = {}
+        self._corr_cache_date   = None
 
     def approve_trade(self, signal: dict) -> tuple:
         if self.engine_stopped:
@@ -52,26 +55,39 @@ class RiskAgent:
                     if open_sec == new_sector:
                         return False, f"SECTOR_LIMIT_REACHED_{new_sector}"
 
-        # Robust Portfolio Correlation Logic
+        # Robust Portfolio Correlation Logic (O(1) Cached)
         if self.data and hasattr(self.data, "daily_cache") and self.data.daily_cache:
+            import datetime
+            today_str = datetime.date.today().isoformat()
+            if self._corr_cache_date != today_str:
+                self._corr_series_cache = {}
+                self._corr_cache_date = today_str
+
             sym_new = signal.get("symbol")
             if sym_new and len(self.open_positions) > 0:
                 try:
                     import pandas as pd
-                    token_new = next((t for t, sym in self.data.UNIVERSE.items() if sym == sym_new), None)
-                    if token_new:
-                        closes_new = pd.Series(self.data.daily_cache.get_closes(token_new)[-20:])
-                        if len(closes_new) >= 10:
-                            for pos in self.open_positions.values():
-                                open_sym = pos["symbol"]
-                                token_open = next((t for t, sym in self.data.UNIVERSE.items() if sym == open_sym), None)
-                                if token_open:
-                                    closes_open = pd.Series(self.data.daily_cache.get_closes(token_open)[-20:])
-                                    if len(closes_open) >= 10:
-                                        min_l = min(len(closes_new), len(closes_open))
-                                        corr = closes_new.iloc[-min_l:].corr(closes_open.iloc[-min_l:])
-                                        if pd.notna(corr) and corr > 0.85:
-                                            return False, f"HIGH_CORR_{corr:.2f}_WITH_{open_sym}"
+                    def get_series(sym):
+                        if sym in self._corr_series_cache:
+                            return self._corr_series_cache[sym]
+                        token = next((t for t, s in self.data.UNIVERSE.items() if s == sym), None)
+                        if token:
+                            closes = pd.Series(self.data.daily_cache.get_closes(token)[-20:])
+                            if len(closes) >= 10:
+                                self._corr_series_cache[sym] = closes
+                                return closes
+                        return None
+
+                    closes_new = get_series(sym_new)
+                    if closes_new is not None:
+                        for pos in self.open_positions.values():
+                            open_sym = pos["symbol"]
+                            closes_open = get_series(open_sym)
+                            if closes_open is not None:
+                                min_l = min(len(closes_new), len(closes_open))
+                                corr = closes_new.iloc[-min_l:].corr(closes_open.iloc[-min_l:])
+                                if pd.notna(corr) and corr > 0.85:
+                                    return False, f"HIGH_CORR_{corr:.2f}_WITH_{open_sym}"
                 except Exception as e:
                     print(f"[Risk] Correlation Check Error for {sym_new}: {e}")
 
@@ -145,9 +161,14 @@ class RiskAgent:
         if vix > 22.0:
             regime_scale *= 0.6  # Reduce risk implicitly at elevated VIX
 
-        # Absorb STT + brokerage + slippage
-        cost_buffer = 0.997  # explicit margin for slippage + fees + STT
-        risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * regime_scale * cost_buffer
+        # Calculate realistic cost decay logic directly against targeted margin
+        stt_cost       = 0.00025  # STT: 0.025% on MIS sell leg 
+        slippage_cost  = 0.0008   # Slippage: ~0.04% * 2 legs
+        brokerage_cost = 0.0005   # Brokerage: Implicit ~0.05% eq variance
+        cost_buffer    = 1.0 - (stt_cost + slippage_cost + brokerage_cost)
+        
+        # Risk applied specifically to the Active 80% capital sector
+        risk_rs = self.active_capital * MAX_RISK_PER_TRADE_PCT * regime_scale * cost_buffer
         rps     = abs(entry - stop)
         if rps <= 0:
             return 0
