@@ -672,9 +672,11 @@ class ScannerAgent:
             if atr <= 0:
                 atr = current * 0.02
 
-            stop_price  = round(current * (1 + S6_STOP_PCT), 2)
-            target_1    = round(current * (1 - S6_TARGET_PCT), 2)
-            target_2    = round(current * (1 - S6_TARGET_PCT * 2), 2)
+            stop_price  = round(current + atr * 1.0, 2)
+            risk = stop_price - current
+            if risk <= 0: continue
+            target_1    = round(current - risk * 1.5, 2)
+            target_2    = round(current - risk * 2.5, 2)
 
             signals.append({
                 "strategy":          "S6_TREND_SHORT",
@@ -887,10 +889,12 @@ class ScannerAgent:
             if atr <= 0:
                 atr = current * 0.02
 
-            stop_price   = round(current * (1 - S7_STOP_PCT), 2)
+            stop_price   = round(current - atr * 1.5, 2)
+            risk = current - stop_price
+            if risk <= 0: continue
             target_price = round(vwap, 2)
-            if target_price <= current * 1.001:
-                target_price = round(current * (1 + S7_TARGET_PCT), 2)
+            if (target_price - current) < risk * 1.5:
+                target_price = round(current + risk * 1.5, 2)
             if stop_price >= current * 0.998:
                 continue
 

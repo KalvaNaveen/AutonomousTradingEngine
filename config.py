@@ -133,16 +133,14 @@ S3_TARGET_MULT          = 1.5       # Target: 1.5× range size
 
 # ── S6_TREND_SHORT: Trend Breakout Short (kept from V18) ──────────
 # Shorts stocks showing relative weakness on down days (intraday MIS)
-S6_RSI_PERIOD           = 4
-S6_RSI_ENTRY_LOW        = 55
-S6_RSI_ENTRY_HIGH       = 85
-S6_RSI_EXIT             = 40
+S6_RSI_PERIOD           = 14
+S6_RSI_ENTRY_LOW        = 40
+S6_RSI_ENTRY_HIGH       = 65
+S6_RSI_EXIT             = 30
 S6_COOLDOWN_DAYS        = 2
 S6_MIN_TURNOVER_CR      = 30
 S6_RELATIVE_WEAKNESS    = 0.005
 S6_RVOL_MIN             = 1.3
-S6_STOP_PCT             = 0.003
-S6_TARGET_PCT           = 0.005
 S6_VWAP_FILTER          = True
 
 
@@ -155,14 +153,12 @@ S6_VWAP_RISK_PCT        = 0.005     # Risk 0.5%
 S6_VWAP_RR              = 2.0       # Target: VWAP or 1:2 RR
 
 # ── S7: Mean Reversion Long (kept from V18, intraday MIS) ─────────
-S7_RSI_PERIOD           = 4
+S7_RSI_PERIOD           = 14
 S7_RSI_OVERSOLD         = 30
 S7_RSI_EXIT             = 60
 S7_VWAP_DEVIATION_PCT   = 0.004
 S7_MIN_TURNOVER_CR      = 50
 S7_RVOL_MIN             = 1.2
-S7_STOP_PCT             = 0.0025
-S7_TARGET_PCT           = 0.005
 S7_ATR_PERIOD           = 14
 
 # ── S8: Volume Profile + Pivot Breakout (MD Strategy 8, lines 175-190) ──

@@ -306,6 +306,14 @@ class BNFEngine:
     def _tick_inner(self):
         if not self.token_ok or not self.execution:
             return
+            
+        # ── EXTERNAL MANUAL KILL SWITCH ──
+        import os, config
+        kill_file = os.path.join(config.BASE_DIR, "data", "kill_switch.txt")
+        if os.path.exists(kill_file):
+            self.risk.engine_stopped = True
+            self.risk.stop_reason = "MANUAL_KILL_SWITCH_FILE_TRIGGERED"
+        
         
         # ── KILL SWITCH GUARD ──
         if self.risk.engine_stopped:

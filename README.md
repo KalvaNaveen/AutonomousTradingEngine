@@ -9,30 +9,37 @@ The V19 Engine operates heavily decoupled across diversified independent strateg
 1. **S1: Moving Average Crossover + ADX (Trend)**
    * **Focus:** Captures heavy intraday trends.
    * **Trigger:** Fast EMA (9) crossover against Slow EMA (21) strictly filtered by ADX(14) > 25 for momentum, aligned with the 200 EMA higher-timeframe trend.
+   * **Exit Matrix:** Target hard-coded strictly at `1:3 RR`. Stops trail at exactly `1.5x ATR`. Risk `0.5%`.
 
 2. **S2: BB & RSI Mean Reversion (Chop / Sideways)**
    * **Focus:** Generates alpha in untrending, choppy regimes.
    * **Trigger:** Fades extremes when Price breaches Bollinger Bands (20, 2σ) while RSI(14) signals oversold (<30) or overbought (>70) against Daily VWAP.
+   * **Exit Matrix:** Reversion to Middle BB or `1:2 RR`. Maximum Time Holding: 30 minutes. Stops at `1.0x ATR`.
 
 3. **S3: Opening Range Breakout (ORB)**
    * **Focus:** Exploits institutional morning liquidity gaps.
-   * **Trigger:** Identifies 9:15-9:30 AM High/Low range. Executes exclusively on a 15-minute close outside the threshold alongside heavy RVOL spikes.
+   * **Trigger:** Identifies 9:15-9:30 AM High/Low range. Executes exclusively on a 15-minute close outside threshold alongside heavy RVOL spikes.
+   * **Exit Matrix:** Target `1.5x` ORB Range multiplier. Strict 15:20 IST EOD force close. Max 2 runs/day.
 
 4. **S4: Cash-Futures Arbitrage**
    * **Focus:** Ultra-low risk delta-neutral capture.
-   * **Trigger:** Scans NIFTY50 / BANKNIFTY indexes vs near-month Futures mispricing > 0.15%.
+   * **Trigger:** Scans NIFTY50 / BANKNIFTY indexes vs near-month Futures mispricing > `0.15%` variance vs RBI rate.
+   * **Exit Matrix:** Exits upon price compression `< 0.05%` or a massive 30-minute time cap holding limit. Hedged risk `2%`.
 
 5. **S6_VWAP: VWAP Band Reversion**
    * **Focus:** Intraday pullback exploitation.
-   * **Trigger:** Triggers when price strongly deviates > ±1.5 standard deviations from Intraday VWAP against the macro trend.
+   * **Trigger:** Triggers when price strongly deviates `> ±1.5` standard deviations from Intraday VWAP against macro trend.
+   * **Exit Matrix:** Targets absolute mean-reversion line (VWAP). Secured natively at `>= 1:2 RR`.
 
 6. **S8: Volume Profile + Pivot Point Breakout**
    * **Focus:** Confirms institutional accumulation/distribution.
-   * **Trigger:** Trades strictly on volume spikes > 1.5x average piercing major R1/S1 or VAH/VAL zones.
+   * **Trigger:** Trades strictly on volume spikes `> 1.5x` average piercing major `R1/S1` or `VAH/VAL` zones.
+   * **Exit Matrix:** Locked at `0.5%` maximum capital risk. Dynamically secures profit via strict `>= 1.5 RR` target nodes.
 
 7. **S9: Multi-Timeframe Trend + Momentum Filter**
    * **Focus:** Swing/Intraday confluence precision.
-   * **Trigger:** Aligns a 15-minute RSI & MACD signal specifically to the prevailing slope of the Daily 200 EMA context.
+   * **Trigger:** Aligns a 15-minute `RSI(14) > 50` & MACD signal specifically to the prevailing slope of the Daily `200 EMA`.
+   * **Exit Matrix:** Designed for outsized winners targeting exactly `1:3 RR`. Employs wide `2.0x ATR` stop buffering.
 
 ---
 
@@ -59,7 +66,10 @@ V19 radically overhauls risk layers to guarantee survival and strict drawdown co
 
 1. **Environment Config:** Duplicate `.env.example` to `.env`. Add your active `KITE_API_KEY`, secrets, and TOTP base tokens.
 2. **Switch Execution Modes:** Define `PAPER_MODE=true` in your `.env` to engage realistic virtualization (reads LIVE websockets, builds purely VIRTUAL P&L). Switch to `false` for active LIVE equity injection.
-3. **Execution Execution:**
+3. **Emergency Manual Kill-Switch:**
+   Drop a blank text file named `kill_switch.txt` anywhere into the `/data` directory. The engine polls this continuously and will execute an immediate system-wide `flatten_all` overriding all loops, shutting the engine down instantly for you.
+
+4. **Engine Execution:**
    ```bash
    pip install -r requirements.txt
    python main.py
