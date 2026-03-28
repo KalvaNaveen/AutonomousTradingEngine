@@ -58,10 +58,12 @@ TOTAL_CAPITAL       = float(os.getenv("TRADING_CAPITAL", "500000"))
 # Buffer (Risk Reserve): Rs.1,00,000 (20%)
 MAX_RISK_PER_TRADE_PCT  = 0.005     # 0.50% of total capital per trade = Rs.2,500
 DAILY_LOSS_LIMIT_PCT    = 0.015     # 1.5% daily max loss = Rs.7,500 → stop trading
-MAX_CONSECUTIVE_LOSSES  = 2         # Stop after 2 consecutive losses (discipline)
+MAX_CONSECUTIVE_LOSSES  = 4         # Stop after 4 consecutive losses (institutional standard)
 MAX_OPEN_POSITIONS      = 3         # Max simultaneous positions
 MAX_POSITION_PCT        = 0.25      # Max 25% capital per single position
 MAX_TRADES_PER_DAY      = 5         # Hard cap: 5 trades/day across all strategies
+EOD_SQUAREOFF_TIME      = "15:10"   # Primary squareoff (5 min buffer before Zerodha auto-sq)
+EOD_SQUAREOFF_FINAL     = "15:20"   # Emergency backup only
 
 # === PERFORMANCE & COST BUFFERS (V7) ===
 STT_BUFFER                  = 0.997     # ~0.1% brokerage + 0.025% STT sell-side + slippage safety
@@ -131,7 +133,7 @@ S2_VIX_MAX              = 25        # Avoid if VIX > 25 (was 20 — elevated but
 # Short: First 15-min candle closes below range Low + volume > average
 S3_RISK_PCT             = 0.0075    # Risk 0.75% max
 S3_MAX_TRADES           = 2         # Max 2 trades/day
-S3_ENTRY_END            = "14:00"   # Entry window: 9:30 AM - 2:00 PM only
+S3_ENTRY_END            = "11:00"   # Max 90 minutes after ORB formation
 S3_EXIT_TIME            = "15:20"   # Mandatory exit by 3:20 PM
 S3_TARGET_MULT          = 1.5       # Target: 1.5× range size
 

@@ -213,6 +213,7 @@ class BNFEngine:
             self.kite, self.risk, self.journal, self.state
         )
         self.execution._data_universe = self.data.UNIVERSE
+        self.execution.tick_store     = self.tick_store
 
     # ── 8:30 AM: Auto token refresh ───────────────────────────────
 
@@ -576,8 +577,7 @@ class BNFEngine:
         trades = self.journal.get_period_trades(from_date, to_date)
         msg = build_weekly_report(period_stats, from_date, to_date,
                                    self.capital, trades=trades)
-        if not trades:
-            self.execution.alert(msg)
+        self.execution.alert(msg)
         print(f"[Engine] Weekly summary sent: {from_date} -> {to_date}")
 
     def monthly_summary(self):
@@ -594,8 +594,7 @@ class BNFEngine:
         trades = self.journal.get_period_trades(from_date, to_date)
         msg = build_monthly_report(period_stats, from_date, to_date,
                                     self.capital, trades=trades)
-        if not trades:
-            self.execution.alert(msg)
+        self.execution.alert(msg)
         print(f"[Engine] Monthly summary sent: {from_date} -> {to_date}")
 
     def run(self):
@@ -630,11 +629,13 @@ class BNFEngine:
         print(f"[Engine] Trading day confirmed: {today} ({today.strftime('%A')})")
 
         # Schedule all tasks
+        from config import EOD_SQUAREOFF_FINAL
+        schedule.every().monday.at("08:45").do(self.risk.reset_weekly_pnl)
         schedule.every().day.at("08:30").do(self.auto_token_refresh)
         schedule.every().day.at("08:45").do(self.refresh_calendar)
         schedule.every().day.at("08:45").do(self.preload_cache)
         schedule.every().day.at("09:00").do(self.pre_market)
-        schedule.every().day.at("15:20").do(self.force_eod_exit)
+        schedule.every().day.at(EOD_SQUAREOFF_FINAL).do(self.force_eod_exit)
         schedule.every().day.at("15:30").do(self.end_of_day)
         schedule.every().day.at("15:45").do(self.stop_websocket)
         schedule.every().day.at("15:45").do(self.update_historical_db)

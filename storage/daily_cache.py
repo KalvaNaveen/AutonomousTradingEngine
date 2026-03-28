@@ -388,8 +388,9 @@ class DailyCache:
         if len(prices) < period:
             return prices
         k   = 2 / (period + 1)
-        ema = [prices[0]]
-        for p in prices[1:]:
+        seed = sum(prices[:period]) / period
+        ema  = [seed]
+        for p in prices[period:]:
             ema.append(p * k + ema[-1] * (1 - k))
         return ema
 

@@ -1,13 +1,16 @@
 import sys
 import os
+from pathlib import Path
+
+# Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import os
 import pandas as pd
 from kiteconnect import KiteConnect
 from dotenv import load_dotenv
 
-load_dotenv('c:/Users/Admin/.gemini/antigravity/scratch/bnf_engine/.env')
+# Automatically find .env from the project root
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 kite = KiteConnect(api_key=os.getenv('KITE_API_KEY'))
 kite.set_access_token(os.getenv('KITE_ACCESS_TOKEN'))
 

@@ -160,6 +160,7 @@ class FillMonitor:
         is_short = trade.get("is_short", False)
         sl_txn = (self.kite.TRANSACTION_TYPE_BUY if is_short
                   else self.kite.TRANSACTION_TYPE_SELL)
+        exit_txn = sl_txn
         try:
             new_sl_oid = self.kite.place_order(
                 variety=self.kite.VARIETY_SL,
@@ -185,7 +186,7 @@ class FillMonitor:
                     variety=self.kite.VARIETY_REGULAR,
                     exchange=self.kite.EXCHANGE_NSE,
                     tradingsymbol=symbol,
-                    transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                    transaction_type=exit_txn,
                     quantity=partial_qty,
                     product=product,
                     order_type=self.kite.ORDER_TYPE_LIMIT,
@@ -201,7 +202,7 @@ class FillMonitor:
                 variety=self.kite.VARIETY_REGULAR,
                 exchange=self.kite.EXCHANGE_NSE,
                 tradingsymbol=symbol,
-                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                transaction_type=exit_txn,
                 quantity=remaining_qty if new_partial_oid else actual_qty,
                 product=product,
                 order_type=self.kite.ORDER_TYPE_LIMIT,

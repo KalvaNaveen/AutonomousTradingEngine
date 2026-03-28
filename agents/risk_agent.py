@@ -210,6 +210,7 @@ class RiskAgent:
         # (set in monitor_positions when partial_filled detected).
         final_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
         self.daily_pnl += final_leg_pnl
+        self.weekly_pnl += final_leg_pnl
 
         # Total trade PnL = partial profit (already added to daily_pnl) + final leg.
         # Win/loss streak uses NET result across all legs, not final leg alone.
@@ -232,7 +233,7 @@ class RiskAgent:
         if not t:
             return {"total": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
                     "gross_pnl": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
-                    "loss_streak": self.consecutive_losses, "capital": self.capital}
+                    "loss_streak": self.consecutive_losses, "capital": self.total_capital}
         wins   = [x for x in t if x["pnl"] > 0]
         losses = [x for x in t if x["pnl"] <= 0]
         return {
@@ -244,5 +245,10 @@ class RiskAgent:
             "avg_win":     float(np.mean([x["pnl"] for x in wins])) if wins else 0,
             "avg_loss":    float(np.mean([x["pnl"] for x in losses])) if losses else 0,
             "loss_streak": self.consecutive_losses,
-            "capital":     self.capital,
+            "capital":     self.total_capital,
         }
+
+    def reset_weekly_pnl(self):
+        """Call at start of each trading week (Monday pre_market)."""
+        self.weekly_pnl = 0.0
+        print(f"[Risk] Weekly PnL reset. New week starting.")

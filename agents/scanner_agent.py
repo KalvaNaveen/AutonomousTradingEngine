@@ -106,6 +106,10 @@ class ScannerAgent:
         if VIX_NORMAL_LOW <= vix <= VIX_NORMAL_HIGH:
             print(f"[Regime] NORMAL — VIX={vix:.1f} AD={ad_ratio:.2f}")
             return "NORMAL"
+        if vix > VIX_BULL_MAX and vix < VIX_BEAR_PANIC:
+            print(f"[Regime] VOLATILE — VIX={vix:.1f} AD={ad_ratio:.2f}")
+            return "VOLATILE"
+
         print(f"[Regime] CHOP — VIX={vix:.1f} AD={ad_ratio:.2f}")
         return "CHOP"
 
@@ -256,18 +260,20 @@ class ScannerAgent:
                 continue
 
             # ── ADX filter: must be > 25 (MD: no trade if ADX < 25) ──
-            highs  = self.data.daily_cache.get_highs(token)
-            lows   = self.data.daily_cache.get_lows(token)
-            closes = self.data.daily_cache.get_closes(token)
-            if len(highs) < S1_ADX_PERIOD + 2:
+            candles = self.data.get_intraday_ohlcv(token, "15minute")
+            if len(candles) < S1_ADX_PERIOD + 2:
+                continue
+                
+            highs_15 = [c["high"] for c in candles]
+            lows_15  = [c["low"] for c in candles]
+            closes_15 = [c["close"] for c in candles]
+            adx = DataAgent.compute_adx(highs_15, lows_15, closes_15, S1_ADX_PERIOD)
+            if adx < S1_ADX_MIN:
                 continue
 
-            adx = DataAgent.compute_adx(highs, lows, closes, S1_ADX_PERIOD)
-            if adx < S1_ADX_MIN:
-                continue   # MD: no trade if ADX < 25
-
             # ── ATR-based stop: 1.5 × ATR(14) ──
-            atr = self.data.daily_cache.get_atr(token)
+            atr_vals = [max(highs_15[i]-lows_15[i], abs(highs_15[i]-closes_15[i-1]), abs(lows_15[i]-closes_15[i-1])) for i in range(1, len(highs_15))]
+            atr = float(np.mean(atr_vals[-14:])) if len(atr_vals) >= 14 else current * 0.005
             if atr <= 0:
                 atr = current * 0.015
 
@@ -365,6 +371,15 @@ class ScannerAgent:
             current = self.data.tick_store.get_ltp_if_fresh(token)
             if current <= 0:
                 continue
+
+            # Intraday ATR check — skip if stock is trending today (not ranging)
+            candles_today = self.data.get_intraday_ohlcv(token, "5minute")
+            if len(candles_today) >= 6:
+                intra_ranges = [c["high"] - c["low"] for c in candles_today[-6:]]
+                avg_intra_range = float(np.mean(intra_ranges))
+                daily_atr = self.data.daily_cache.get_atr(token)
+                if daily_atr > 0 and avg_intra_range > daily_atr * 0.50:
+                    continue
 
             # ── Bollinger Bands from 5-min closes ──
             candles = self.data.get_intraday_ohlcv(token, "5minute")
@@ -472,8 +487,9 @@ class ScannerAgent:
         now = now_ist()
         t   = now.time()
 
-        # Entry window: 9:30 AM - 2:00 PM (MD rule, line 97)
-        if not (datetime.time(9, 30) <= t <= datetime.time(14, 0)):
+        # Entry window: 9:30 AM - S3_ENTRY_END
+        eh, em = map(int, S3_ENTRY_END.split(':'))
+        if not (datetime.time(9, 30) <= t <= datetime.time(eh, em)):
             return []
 
         # Skip expiry days robustly (Wed/Thu checks + blackout integration)
@@ -738,6 +754,15 @@ class ScannerAgent:
             if current <= 0:
                 continue
 
+            # Intraday ATR check — skip if stock is trending today (not ranging)
+            candles_today = self.data.get_intraday_ohlcv(token, "5minute")
+            if len(candles_today) >= 6:
+                intra_ranges = [c["high"] - c["low"] for c in candles_today[-6:]]
+                avg_intra_range = float(np.mean(intra_ranges))
+                daily_atr = self.data.daily_cache.get_atr(token)
+                if daily_atr > 0 and avg_intra_range > daily_atr * 0.50:
+                    continue
+
             vwap = self.data.tick_store.get_vwap(token)
             if vwap <= 0:
                 continue
@@ -748,7 +773,7 @@ class ScannerAgent:
                 # Not enough intraday data for SD
                 continue
             intra_closes = [c["close"] for c in candles]
-            vwap_sd = float(np.std(intra_closes)) if len(intra_closes) >= 5 else 0
+            vwap_sd = float(np.std([c - vwap for c in intra_closes])) if len(intra_closes) >= 5 else 0
             if vwap_sd <= 0:
                 continue
 
@@ -858,6 +883,15 @@ class ScannerAgent:
             current = self.data.tick_store.get_ltp_if_fresh(token)
             if current <= 0:
                 continue
+
+            # Intraday ATR check — skip if stock is trending today (not ranging)
+            candles_today = self.data.get_intraday_ohlcv(token, "5minute")
+            if len(candles_today) >= 6:
+                intra_ranges = [c["high"] - c["low"] for c in candles_today[-6:]]
+                avg_intra_range = float(np.mean(intra_ranges))
+                daily_atr = self.data.daily_cache.get_atr(token)
+                if daily_atr > 0 and avg_intra_range > daily_atr * 0.50:
+                    continue
 
             sma200 = self.data.daily_cache.get_sma200(token)
             if current < sma200 or sma200 <= 0:
@@ -1076,6 +1110,11 @@ class ScannerAgent:
         if not self._cache_ts_ready():
             return []
 
+        # S9 needs enough 15-min bars for MACD — only valid after 11:30
+        now_t = now_ist().time()
+        if now_t < datetime.time(13, 15):  # Only in Window 2
+            return []
+
         signals = []
 
         for token, symbol in self.data.UNIVERSE.items():
@@ -1093,10 +1132,6 @@ class ScannerAgent:
 
             # ── Lower TF: 15-min RSI > 50 + MACD crossover ──
             c15 = self._get_15min_closes(token)
-            # Fallback: use daily closes if insufficient 15-min bars
-            # (happens in simulation and early intraday hours)
-            if len(c15) < 35:
-                c15 = closes_d[-60:] if len(closes_d) >= 60 else closes_d
             if len(c15) < 35:     # Need enough bars for MACD(12,26,9)
                 continue
 

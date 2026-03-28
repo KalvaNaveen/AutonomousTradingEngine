@@ -25,6 +25,7 @@ class ExecutionAgent:
         self.state   = state
         self.fill_monitor = FillMonitor(kite, state, alert_fn=self.alert)
         self.active_trades = {}
+        self.tick_store = None
         self.tg_base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
     def restore_from_state(self):
@@ -140,6 +141,34 @@ class ExecutionAgent:
                 self.alert(f"ORDER FAILED: `{signal['symbol']}`\n`{e}`")
                 return False
 
+        # After main futures leg placed successfully:
+        if signal.get("is_two_leg") and signal.get("spot_leg"):
+            spot_info = signal["spot_leg"]
+            spot_txn = (self.kite.TRANSACTION_TYPE_BUY
+                        if spot_info["direction"] == "BUY"
+                        else self.kite.TRANSACTION_TYPE_SELL)
+            spot_exchange = spot_info.get("exchange", "NSE")
+            spot_symbol   = spot_info.get("symbol", "")
+            # Only NIFTYBEES or equivalent ETF — not the index itself
+            if "SPOT" not in spot_symbol:   # guard: don't try to buy an index
+                try:
+                    self.kite.place_order(
+                        variety=self.kite.VARIETY_REGULAR,
+                        exchange=spot_exchange,
+                        tradingsymbol=spot_symbol,
+                        transaction_type=spot_txn,
+                        quantity=qty,
+                        product=product,
+                        order_type=self.kite.ORDER_TYPE_MARKET,
+                        validity=self.kite.VALIDITY_DAY
+                    )
+                except Exception as e:
+                    # If spot leg fails, cancel futures leg immediately
+                    try: self.kite.cancel_order(self.kite.VARIETY_REGULAR, entry_oid)
+                    except: pass
+                    self.alert(f"S4 SPOT LEG FAILED — futures cancelled: {e}")
+                    return False
+
         now   = now_ist()
         trade = {
             **signal,
@@ -238,8 +267,10 @@ class ExecutionAgent:
                     trade["partial_filled"] = True
                     self.state.mark_partial_filled(oid, trade["remaining_qty"])
 
-            # ── MIS EOD Square-off at 15:14 ──
-            if now.time() >= datetime.time(15, 14):
+            # ── MIS EOD Square-off ──
+            from config import EOD_SQUAREOFF_TIME
+            sq_h, sq_m = map(int, EOD_SQUAREOFF_TIME.split(":"))
+            if now.time() >= datetime.time(sq_h, sq_m):
                 self._force_exit(oid, trade, "MIS_EOD_SQUAREOFF")
                 continue
 
@@ -305,11 +336,19 @@ class ExecutionAgent:
             self.alert(f"FORCE EXIT FAILED: `{trade['symbol']}` -- {e}")
             return
 
-        pnl = self.risk.close_position(oid, trade["entry_price"])
+        # Estimate exit price from live tick (market order, so price is approximate)
+        token     = trade.get("token")
+        exit_est  = trade["entry_price"]  # safe fallback
+        if self.tick_store and token:
+            ltp = self.tick_store.get_ltp(token)
+            if ltp > 0:
+                exit_est = ltp
+
+        pnl = self.risk.close_position(oid, exit_est)
         self.state.close(oid)
         self.journal.log_trade({
             **trade,
-            "full_exit_price": trade["entry_price"],
+            "full_exit_price": exit_est,
             "pnl":             pnl,
             "exit_reason":     reason,
             "exit_time":       now_ist(),
