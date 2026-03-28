@@ -20,11 +20,37 @@ class RiskAgent:
         if self.engine_stopped:
             return False, f"ENGINE_STOPPED: {self.stop_reason}"
             
+        import os
+        import time
+        cooldown_file = os.path.join(BASE_DIR, "data", "cooldown.txt")
+        if os.path.exists(cooldown_file):
+            with open(cooldown_file, "r") as f:
+                try:
+                    expiry = float(f.read().strip())
+                    if time.time() < expiry:
+                        self.engine_stopped = True
+                        return False, "ENFORCED_3_DAY_COOLDOWN"
+                except: pass
+                
         WEEKLY_DRAWDOWN_PCT = 0.08
         if self.weekly_pnl <= -(self.capital * WEEKLY_DRAWDOWN_PCT):
             self.engine_stopped = True
             self.stop_reason    = "WEEKLY_DRAWDOWN_8%"
+            # Write 3-day cooldown
+            os.makedirs(os.path.dirname(cooldown_file), exist_ok=True)
+            with open(cooldown_file, "w") as f:
+                f.write(str(time.time() + 3*24*3600))
             return False, self.stop_reason
+
+        # Sector check
+        if self.data and hasattr(self.data, "SYMBOL_TO_SECTOR"):
+            new_sym = signal.get("symbol")
+            new_sector = self.data.SYMBOL_TO_SECTOR.get(new_sym)
+            if new_sector:
+                for pos in self.open_positions.values():
+                    open_sec = self.data.SYMBOL_TO_SECTOR.get(pos.get("symbol"))
+                    if open_sec == new_sector:
+                        return False, f"SECTOR_LIMIT_REACHED_{new_sector}"
 
         if self.data and hasattr(self.data, "daily_cache") and self.data.daily_cache:
             sym_new = signal.get("symbol")
@@ -92,8 +118,8 @@ class RiskAgent:
             risk   = signal["entry_price"] - signal["stop_price"]
             
         rr = reward / risk if risk > 0 else 0
-        if rr < 1.0: # relaxed for shorts and day trades
-            return False, f"RR_{rr:.2f}_BELOW_1.0"
+        if rr < 1.5:
+            return False, f"RR_{rr:.2f}_BELOW_1.5_STRICT"
         return True, "APPROVED"
 
     def calculate_position_size(self, entry: float, stop: float,
@@ -119,6 +145,11 @@ class RiskAgent:
             "EXTREME_PANIC": 0.30,
             "CHOP":          0.80,
         }.get(regime, 1.0)
+
+        # Dynamic Volatility scaling
+        vix = self.data.get_india_vix() if self.data else 15.0
+        if vix > 22.0:
+            regime_scale *= 0.6  # Reduce risk implicitly at elevated VIX
 
         # Absorb STT + brokerage + slippage
         risk_rs = self.capital * MAX_RISK_PER_TRADE_PCT * regime_scale * 0.998

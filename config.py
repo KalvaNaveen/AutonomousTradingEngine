@@ -56,8 +56,8 @@ TOTAL_CAPITAL       = float(os.getenv("TRADING_CAPITAL", "500000"))
 # Total Capital: Rs.5,00,000
 # Active Trading Capital: Rs.4,00,000 (80%)
 # Buffer (Risk Reserve): Rs.1,00,000 (20%)
-MAX_RISK_PER_TRADE_PCT  = 0.0075    # 0.75% of total capital per trade = Rs.3,750
-DAILY_LOSS_LIMIT_PCT    = 0.02      # 2% daily max loss = Rs.10,000 → stop trading
+MAX_RISK_PER_TRADE_PCT  = 0.005     # 0.50% of total capital per trade = Rs.2,500
+DAILY_LOSS_LIMIT_PCT    = 0.015     # 1.5% daily max loss = Rs.7,500 → stop trading
 MAX_CONSECUTIVE_LOSSES  = 2         # Stop after 2 consecutive losses (discipline)
 MAX_OPEN_POSITIONS      = 3         # Max simultaneous positions
 MAX_POSITION_PCT        = 0.25      # Max 25% capital per single position
