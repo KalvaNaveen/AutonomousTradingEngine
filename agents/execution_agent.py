@@ -386,7 +386,7 @@ class ExecutionAgent:
             stats=stats,
             regime=regime,
             trades_today=trades_today,
-            capital=self.risk.capital,
+            capital=self.risk.total_capital,
             total_scans=total_scans,
         )
         self.alert(msg)

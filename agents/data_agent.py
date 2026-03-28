@@ -420,14 +420,17 @@ class DataAgent:
         if len(prices) < slow:
             return []
         def _ema(data, n):
-            k   = 2 / (n + 1)
-            ema = [data[0]]
-            for p in data[1:]:
+            if not data: return []
+            k    = 2 / (n + 1)
+            seed = sum(data[:n]) / n
+            ema  = [seed]
+            for p in data[n:]:
                 ema.append(p * k + ema[-1] * (1 - k))
             return ema
         ema_fast   = _ema(prices, fast)
         ema_slow   = _ema(prices, slow)
-        return [f - s for f, s in zip(ema_fast, ema_slow)]
+        min_len    = min(len(ema_fast), len(ema_slow))
+        return [ema_fast[i] - ema_slow[i] for i in range(min_len)]
 
     @staticmethod
     def compute_macd(prices: list,
@@ -442,9 +445,11 @@ class DataAgent:
             return 0.0, 0.0, 0.0
 
         def _ema(data, n):
-            k   = 2 / (n + 1)
-            ema = [data[0]]
-            for p in data[1:]:
+            if not data: return []
+            k    = 2 / (n + 1)
+            seed = sum(data[:n]) / n
+            ema  = [seed]
+            for p in data[n:]:
                 ema.append(p * k + ema[-1] * (1 - k))
             return ema
 

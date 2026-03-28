@@ -140,8 +140,8 @@ S3_TARGET_MULT          = 1.5       # Target: 1.5× range size
 # ── S6_TREND_SHORT: Trend Breakout Short (kept from V18) ──────────
 # Shorts stocks showing relative weakness on down days (intraday MIS)
 S6_RSI_PERIOD           = 14
-S6_RSI_ENTRY_LOW        = 48
-S6_RSI_ENTRY_HIGH       = 60
+S6_RSI_ENTRY_LOW        = 40
+S6_RSI_ENTRY_HIGH       = 65
 S6_RSI_EXIT             = 30
 S6_COOLDOWN_DAYS        = 2
 S6_MIN_TURNOVER_CR      = 30

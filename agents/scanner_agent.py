@@ -97,22 +97,26 @@ class ScannerAgent:
             nifty_ltp = closes[-1]
             above_ema = closes[-1] > ema_25
 
+        if vix >= VIX_EXTREME_STOP:
+            return "EXTREME_PANIC"
+
         if vix > VIX_BEAR_PANIC and not above_ema and ad_ratio < 0.40:
             print(f"[Regime] BEAR_PANIC — VIX={vix:.1f} AD={ad_ratio:.2f}")
             return "BEAR_PANIC"
+
         if vix < VIX_BULL_MAX and above_ema and ad_ratio > 0.60:
             print(f"[Regime] BULL — VIX={vix:.1f} AD={ad_ratio:.2f}")
             return "BULL"
-        if VIX_NORMAL_LOW <= vix <= VIX_NORMAL_HIGH:
-            print(f"[Regime] NORMAL — VIX={vix:.1f} AD={ad_ratio:.2f}")
-            return "NORMAL"
-        if vix > VIX_BULL_MAX and vix < VIX_BEAR_PANIC:
+
+        # ── VOLATILE: VIX 18–22.5 (elevated but not panic) ──
+        if VIX_BULL_MAX <= vix <= VIX_BEAR_PANIC:
             print(f"[Regime] VOLATILE — VIX={vix:.1f} AD={ad_ratio:.2f}")
             return "VOLATILE"
-        if vix > VIX_NORMAL_HIGH and vix <= VIX_EXTREME_STOP:
-            if vix > 22.5:
-                print(f"[Regime] VOLATILE (Forces via VIX>22.5) — VIX={vix:.1f}")
-                return "VOLATILE"
+
+        # ── NORMAL: VIX 12–18 ──
+        if VIX_NORMAL_LOW <= vix < VIX_BULL_MAX:
+            print(f"[Regime] NORMAL — VIX={vix:.1f} AD={ad_ratio:.2f}")
+            return "NORMAL"
 
         print(f"[Regime] CHOP — VIX={vix:.1f} AD={ad_ratio:.2f}")
         return "CHOP"
@@ -1162,13 +1166,14 @@ class ScannerAgent:
             ema200_daily = DataAgent.compute_ema(closes_d, S9_EMA_TREND)[-1]
             is_uptrend   = current > ema200_daily
 
-            # ── Lower TF: 15-min RSI > 50 + MACD crossover ──
-            c15 = self._get_15min_closes(token)
-            if len(c15) < 20:     # Need enough bars for EMA (fixed Bug 1)
+            # ── Lower TF: 5-min RSI > 50 + MACD crossover ──
+            c_intra = self.data.get_intraday_ohlcv(token, "5minute")
+            if len(c_intra) < 26:      # Need 26 bars for MACD(12,26)
                 continue
+            c_closes = [c["close"] for c in c_intra]
 
-            rsi_15 = (DataAgent.compute_rsi(c15, S9_RSI_PERIOD) or [50])[-1]
-            macd_line_full = DataAgent._compute_macd_line(c15)
+            rsi_15 = (DataAgent.compute_rsi(c_closes, S9_RSI_PERIOD) or [50])[-1]
+            macd_line_full = DataAgent._compute_macd_line(c_closes)
             if len(macd_line_full) < 2:
                 continue
                 
