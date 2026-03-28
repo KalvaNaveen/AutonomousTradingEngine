@@ -165,7 +165,6 @@ S7_STOP_PCT             = 0.0025
 S7_TARGET_PCT           = 0.005
 S7_ATR_PERIOD           = 14
 
-
 # ── S8: Volume Profile + Pivot Breakout (MD Strategy 8, lines 175-190) ──
 # Best Regime: All (volume confirmation). Timeframe: 15-min/daily.
 # Long: Break above VAH/R1 pivot + volume spike > average
