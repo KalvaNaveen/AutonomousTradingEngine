@@ -6,8 +6,9 @@ from config import *
 class RiskAgent:
 
     def __init__(self, capital: float, data_agent=None):
-        self.capital            = capital
-        self.active_capital     = capital * 0.8  # Grok-V5: 80% Active / 20% Reserve
+        self.total_capital      = capital
+        self.active_capital     = capital * 0.80          # 80% for trading (V5/V6 buffer)
+        self.risk_reserve       = capital * 0.20          # 20% safety buffer
         self.data               = data_agent
         self.daily_pnl          = 0.0
         self.open_positions     = {}
@@ -17,6 +18,7 @@ class RiskAgent:
         self.consecutive_losses = 0
         self.weekly_pnl         = 0.0
         self._corr_series_cache = {}
+        self._corr_cache        = {}
         self._corr_cache_date   = None
 
     def approve_trade(self, signal: dict) -> tuple:
@@ -36,7 +38,7 @@ class RiskAgent:
                 except: pass
                 
         WEEKLY_DRAWDOWN_PCT = 0.08
-        if self.weekly_pnl <= -(self.capital * WEEKLY_DRAWDOWN_PCT):
+        if self.weekly_pnl <= -(self.active_capital * WEEKLY_DRAWDOWN_PCT):
             self.engine_stopped = True
             self.stop_reason    = "WEEKLY_DRAWDOWN_8%"
             # Write 3-day cooldown
@@ -56,47 +58,23 @@ class RiskAgent:
                         return False, f"SECTOR_LIMIT_REACHED_{new_sector}"
 
         # Robust Portfolio Correlation Logic (O(1) Cached)
-        if self.data and hasattr(self.data, "daily_cache") and self.data.daily_cache:
-            import datetime
-            today_str = datetime.date.today().isoformat()
-            if self._corr_cache_date != today_str:
-                self._corr_series_cache = {}
-                self._corr_cache_date = today_str
-
-            sym_new = signal.get("symbol")
-            if sym_new and len(self.open_positions) > 0:
-                try:
-                    import pandas as pd
-                    def get_series(sym):
-                        if sym in self._corr_series_cache:
-                            return self._corr_series_cache[sym]
-                        token = next((t for t, s in self.data.UNIVERSE.items() if s == sym), None)
-                        if token:
-                            closes = pd.Series(self.data.daily_cache.get_closes(token)[-20:])
-                            if len(closes) >= 10:
-                                self._corr_series_cache[sym] = closes
-                                return closes
-                        return None
-
-                    closes_new = get_series(sym_new)
-                    if closes_new is not None:
-                        for pos in self.open_positions.values():
-                            open_sym = pos["symbol"]
-                            closes_open = get_series(open_sym)
-                            if closes_open is not None:
-                                min_l = min(len(closes_new), len(closes_open))
-                                corr = closes_new.iloc[-min_l:].corr(closes_open.iloc[-min_l:])
-                                if pd.notna(corr) and corr > 0.85:
-                                    return False, f"HIGH_CORR_{corr:.2f}_WITH_{open_sym}"
-                except Exception as e:
-                    print(f"[Risk] Correlation Check Error for {sym_new}: {e}")
+        sym_new = signal.get("symbol")
+        if sym_new and len(self.open_positions) > 0:
+            try:
+                corr_matrix = self._get_corr_matrix()
+                if sym_new in corr_matrix:
+                    for open_sym, corr_val in corr_matrix[sym_new].items():
+                        if corr_val > 0.85:
+                            return False, f"HIGH_CORR_{corr_val:.2f}_WITH_{open_sym}"
+            except Exception as e:
+                print(f"[Risk] Correlation Check Error for {sym_new}: {e}")
 
         if self.data:
             vix = self.data.get_india_vix()
             if vix > VIX_EXTREME_STOP:
                 return False, f"VIX_EXTREME_{vix}"
 
-        if self.daily_pnl <= -(self.capital * DAILY_LOSS_LIMIT_PCT):
+        if self.daily_pnl <= -(self.active_capital * DAILY_LOSS_LIMIT_PCT):
             self.engine_stopped = True
             self.stop_reason    = f"DAILY_LOSS_LIMIT Rs.{abs(self.daily_pnl):.0f}"
             return False, self.stop_reason
@@ -132,6 +110,48 @@ class RiskAgent:
             return False, f"RR_{rr:.2f}_BELOW_1.5_STRICT"
         return True, "APPROVED"
 
+    def _get_corr_matrix(self):
+        """Cache correlation once per day or on demand."""
+        import datetime, pandas as pd
+        today_str = datetime.date.today().isoformat()
+        if self._corr_cache_date != today_str:
+            self._corr_cache = {}  # symbol -> symbol -> corr
+            self._corr_series_cache = {}
+            self._corr_cache_date = today_str
+
+        if not self.data or not hasattr(self.data, "daily_cache") or not self.data.daily_cache:
+            return self._corr_cache
+
+        # Re-using the built _corr_series_cache to dynamically populate the dict without O(N^2) load
+        def get_series(sym):
+            if sym in self._corr_series_cache:
+                return self._corr_series_cache[sym]
+            token = next((t for t, s in self.data.UNIVERSE.items() if s == sym), None)
+            if token:
+                closes = pd.Series(self.data.daily_cache.get_closes(token)[-20:])
+                if len(closes) >= 10:
+                    self._corr_series_cache[sym] = closes
+                    return closes
+            return None
+
+        for pos in self.open_positions.values():
+            open_sym = pos["symbol"]
+            closes_open = get_series(open_sym)
+            if closes_open is not None:
+                # We need to map universe against open symbols
+                for t, sym1 in self.data.UNIVERSE.items():
+                    if sym1 not in self._corr_cache:
+                        self._corr_cache[sym1] = {}
+                    if open_sym not in self._corr_cache[sym1]:
+                        closes_new = get_series(sym1)
+                        if closes_new is not None:
+                            min_l = min(len(closes_new), len(closes_open))
+                            corr = closes_new.iloc[-min_l:].corr(closes_open.iloc[-min_l:])
+                            if pd.notna(corr):
+                                self._corr_cache[sym1][open_sym] = corr
+                                
+        return self._corr_cache
+
     def calculate_position_size(self, entry: float, stop: float,
                                 regime: str = "NORMAL",
                                 strategy: str = "") -> int:
@@ -161,14 +181,9 @@ class RiskAgent:
         if vix > 22.0:
             regime_scale *= 0.6  # Reduce risk implicitly at elevated VIX
 
-        # Calculate realistic cost decay logic directly against targeted margin
-        stt_cost       = 0.00025  # STT: 0.025% on MIS sell leg 
-        slippage_cost  = 0.0008   # Slippage: ~0.04% * 2 legs
-        brokerage_cost = 0.0005   # Brokerage: Implicit ~0.05% eq variance
-        cost_buffer    = 1.0 - (stt_cost + slippage_cost + brokerage_cost)
-        
-        # Risk applied specifically to the Active 80% capital sector
-        risk_rs = self.active_capital * MAX_RISK_PER_TRADE_PCT * regime_scale * cost_buffer
+        # Explicit STT + Brokerage Buffer
+        # STT_BUFFER defaults to 0.997 mapped in config.py
+        risk_rs = self.active_capital * MAX_RISK_PER_TRADE_PCT * regime_scale * STT_BUFFER
         rps     = abs(entry - stop)
         if rps <= 0:
             return 0

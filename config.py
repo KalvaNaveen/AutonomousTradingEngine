@@ -63,6 +63,9 @@ MAX_OPEN_POSITIONS      = 3         # Max simultaneous positions
 MAX_POSITION_PCT        = 0.25      # Max 25% capital per single position
 MAX_TRADES_PER_DAY      = 5         # Hard cap: 5 trades/day across all strategies
 
+# ── Dynamic Buffers ──
+STT_BUFFER              = 0.997     # approx 0.1% brokerage + 0.025% STT sell-side + slippage
+
 # ── Instrument Tokens ─────────────────────────────────────────
 NIFTY50_TOKEN       = 256265
 INDIA_VIX_TOKEN     = 264969
