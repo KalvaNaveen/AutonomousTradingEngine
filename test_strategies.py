@@ -539,7 +539,7 @@ class StrategyTester:
                 scan_map = {
                     "S1_MA_CROSS":     lambda: self.scanner.scan_s1_ma_cross(regime),
                     "S2_BB_MEAN_REV":  lambda: self.scanner.scan_s2_bb_mean_rev(regime),
-                    "S3_ORB":          lambda: self.scanner.scan_s3_orb(),
+                    "S3_ORB":          lambda: self.scanner.scan_s3_orb(regime),
                     "S4_ARBITRAGE":    lambda: self.scanner.scan_s4_arbitrage(),
                     "S6_TREND_SHORT":  lambda: self.scanner.scan_s6_trend_short(regime),
                     "S6_VWAP_BAND":    lambda: self.scanner.scan_s6_vwap_band(regime),

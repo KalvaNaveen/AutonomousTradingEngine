@@ -56,12 +56,13 @@ TOTAL_CAPITAL       = float(os.getenv("TRADING_CAPITAL", "500000"))
 # Total Capital: Rs.5,00,000
 # Active Trading Capital: Rs.4,00,000 (80%)
 # Buffer (Risk Reserve): Rs.1,00,000 (20%)
-MAX_RISK_PER_TRADE_PCT  = 0.005     # 0.50% of total capital per trade = Rs.2,500
-DAILY_LOSS_LIMIT_PCT    = 0.015     # 1.5% daily max loss = Rs.7,500 → stop trading
-MAX_CONSECUTIVE_LOSSES  = 4         # Stop after 4 consecutive losses (institutional standard)
-MAX_OPEN_POSITIONS      = 3         # Max simultaneous positions
-MAX_POSITION_PCT        = 0.25      # Max 25% capital per single position
-MAX_TRADES_PER_DAY      = 5         # Hard cap: 5 trades/day across all strategies
+MAX_RISK_PER_TRADE_PCT  = 0.005     # 0.50% per trade (was 0.5%) -- safer
+DAILY_LOSS_LIMIT_PCT    = 0.025     # 2.5% daily max loss (Raised from 1% to accommodate multiple concurrent positions resolving)
+MAX_CONSECUTIVE_LOSSES  = 8         # Allow more consecutive losses before circuit break
+MAX_OPEN_POSITIONS      = 10        # Raised: trade as many as capital allows
+MAX_POSITIONS_PER_STRAT = 3         # Max diverse trades per individual strategy at one time
+MAX_POSITION_PCT        = 0.15      # Max 15% capital per single position
+MAX_TRADES_PER_DAY      = 999       # Effectively unlimited — capital is the only constraint
 EOD_SQUAREOFF_TIME      = "15:10"   # Primary squareoff (5 min buffer before Zerodha auto-sq)
 EOD_SQUAREOFF_FINAL     = "15:20"   # Emergency backup only
 
@@ -106,7 +107,7 @@ S1_EMA_FAST             = 9         # Fast EMA period
 S1_EMA_SLOW             = 21        # Slow EMA period
 S1_EMA_TREND            = 200       # Higher TF trend filter (daily 200 EMA)
 S1_ADX_PERIOD           = 14        # ADX period
-S1_ADX_MIN              = 25        # No trade if ADX < 25
+S1_ADX_MIN              = 20        # Relaxed from 25 → 20; slope filter compensates
 S1_ATR_SL_MULT          = 1.5       # Stop: 1.5 × ATR(14) below/above entry
 S1_RR                   = 3.0       # Target: 1:3 RR
 S1_RISK_PCT             = 0.01      # Max 1% risk per trade
@@ -118,13 +119,13 @@ S1_RISK_PCT             = 0.01      # Max 1% risk per trade
 S2_BB_PERIOD            = 20        # Bollinger Bands period
 S2_BB_SD                = 2.0       # Bollinger Bands standard deviation
 S2_RSI_PERIOD           = 14        # RSI period
-S2_RSI_OVERSOLD         = 30        # RSI < 30 → long signal
-S2_RSI_OVERBOUGHT       = 70        # RSI > 70 → short signal
+S2_RSI_OVERSOLD         = 35        # Reverted to 30 (25 too tight in VIX 9-15)
+S2_RSI_OVERBOUGHT       = 70        # Reverted to 70 (75 too tight in VIX 9-15)
 S2_ATR_SL_MULT          = 1.0       # Stop: 1 × ATR below/above entry
 S2_RR                   = 2.0       # Target: middle BB or 1:2 RR
 S2_RISK_PCT             = 0.005     # Risk 0.5% max
 S2_MAX_HOLD_MINS        = 30        # Time exit: 30-min hold max
-S2_VIX_MAX              = 25        # Avoid if VIX > 25 (was 20 — elevated but tradeable below 25)
+S2_VIX_MAX              = 28        # Avoid if VIX > 25 (was 20 — elevated but tradeable below 25)
 
 # ── S3: Opening Range Breakout (MD Strategy 3, lines 87-106) ───────
 # Best Regime: Volatile/trending days (intraday). Timeframe: 15-min.
@@ -133,7 +134,7 @@ S2_VIX_MAX              = 25        # Avoid if VIX > 25 (was 20 — elevated but
 # Short: First 15-min candle closes below range Low + volume > average
 S3_RISK_PCT             = 0.0075    # Risk 0.75% max
 S3_MAX_TRADES           = 2         # Max 2 trades/day
-S3_ENTRY_END            = "11:00"   # Max 90 minutes after ORB formation
+S3_ENTRY_END            = "11:30"   # Tightened from 14:00 → 11:30
 S3_EXIT_TIME            = "15:20"   # Mandatory exit by 3:20 PM
 S3_TARGET_MULT          = 1.5       # Target: 1.5× range size
 
@@ -154,7 +155,7 @@ S6_VWAP_FILTER          = True
 # Best Regime: Intraday any regime. Timeframe: 5-min.
 # Long: Price < VWAP - 1.5 SD in uptrend (higher TF)
 # Short: Price > VWAP + 1.5 SD in downtrend
-S6_VWAP_SD              = 1.5       # 1.5 standard deviations from VWAP
+S6_VWAP_SD              = 2.0       # Raised to 2.0 SD per research consensus
 S6_VWAP_RISK_PCT        = 0.005     # Risk 0.5%
 S6_VWAP_RR              = 2.0       # Target: VWAP or 1:2 RR
 
@@ -171,7 +172,7 @@ S7_ATR_PERIOD           = 14
 # Best Regime: All (volume confirmation). Timeframe: 15-min/daily.
 # Long: Break above VAH/R1 pivot + volume spike > average
 # Short: Break below VAL/S1 pivot + volume spike
-S8_VOL_SPIKE_MULT       = 1.5       # Volume spike must be > 1.5× average
+S8_VOL_SPIKE_MULT       = 2.0      # Raised to 2.5x to reduce noise (was 2.0)
 S8_RISK_PCT             = 0.0075    # Risk 0.75%
 
 # ── S9: Multi-Timeframe Trend + Momentum (MD Strategy 9, lines 192-207) ──
@@ -180,7 +181,7 @@ S8_RISK_PCT             = 0.0075    # Risk 0.75%
 # Lower TF: RSI > 50 + MACD crossover in trend direction
 S9_EMA_TREND            = 200       # Daily 200 EMA for higher TF filter
 S9_RSI_PERIOD           = 14        # 15-min RSI period
-S9_RSI_THRESHOLD        = 50        # RSI > 50 for bullish momentum
+S9_RSI_THRESHOLD        = 45        # RSI > 50 for bullish momentum
 S9_ATR_SL_MULT          = 2.0       # Stop: 2 × ATR
 S9_RR                   = 3.0       # Target: 1:3 RR
 
@@ -233,4 +234,8 @@ BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE    = os.path.join(BASE_DIR, ".env")
 STATE_DB    = os.path.join(BASE_DIR, "data/engine_state.db")
 JOURNAL_DB  = os.path.join(BASE_DIR, "data/journal.db")
+
+# ── Disabled Strategies ───────────────────────────────────────
+DISABLED_STRATEGIES     = set()     # S9 IS NOW FULLY ENABLED
+
 

@@ -55,8 +55,12 @@ class PaperBroker:
         self.capital           = capital
         self.available_margin  = capital
         self._orders           = {}   # order_id → order dict
+        # Signed qty: positive = long, negative = short
+        # _positions[sym] = {qty: signed int, avg_price: float, product: str}
         self._positions        = {}   # symbol → {qty, avg_price, product}
         self._realised_pnl     = 0.0
+        self._total_brokerage  = 0.0  # track total brokerage separately for clarity
+        self._trades_completed = 0    # complete round-trip trades
         self._lock             = threading.Lock()
         self._running          = True
         self.tick_store        = tick_store      # TickStore — zero-HTTP fill checks
@@ -222,9 +226,11 @@ class PaperBroker:
             o = self._orders.get(oid)
             if not o or o["status"] != "OPEN":
                 return
-                
-            # Add explicit slippage
-            if o["transaction_type"] == self.TRANSACTION_TYPE_BUY:
+
+            tt = o["transaction_type"]
+
+            # Add explicit slippage (buy costs more, sell receives less)
+            if tt == self.TRANSACTION_TYPE_BUY:
                 exec_price = fill_price * (1 + SLIPPAGE_PCT)
             else:
                 exec_price = fill_price * (1 - SLIPPAGE_PCT)
@@ -235,28 +241,60 @@ class PaperBroker:
             o["average_price"]    = exec_price
 
             sym = o["tradingsymbol"]
-            qty = o["quantity"]
+            qty = o["quantity"]   # always positive from place_order
+
             if sym not in self._positions:
                 self._positions[sym] = {"qty": 0, "avg_price": 0.0,
                                         "product": o["product"]}
             pos = self._positions[sym]
 
-            # Flat fee subtracted per fill
-            self.available_margin -= BROKERAGE
+            # Brokerage charged once per fill
+            self._total_brokerage  += BROKERAGE
+            self._realised_pnl     -= BROKERAGE  # cost of doing business
 
-            if o["transaction_type"] == self.TRANSACTION_TYPE_BUY:
-                total = pos["avg_price"] * pos["qty"] + exec_price * qty
-                pos["qty"] += qty
-                pos["avg_price"] = total / pos["qty"] if pos["qty"] else 0
-                self.available_margin -= exec_price * qty
-                self._realised_pnl -= BROKERAGE
+            prev_qty = pos["qty"]   # signed: +ve = long held, -ve = short held
+
+            if tt == self.TRANSACTION_TYPE_BUY:
+                # ── BUY order ──────────────────────────────────────────
+                # Case A: opening a long (prev_qty == 0 or increasing long)
+                # Case B: closing a short (prev_qty < 0)
+                if prev_qty < 0:
+                    # Closing/reducing a short position → realise PnL
+                    closing_qty = min(qty, abs(prev_qty))  # shares being closed
+                    # Short PnL = (entry_price - exit_price) * qty
+                    realised = (pos["avg_price"] - exec_price) * closing_qty
+                    self._realised_pnl += realised
+                    pos["qty"] += qty   # move toward zero / positive
+                    self.available_margin += exec_price * closing_qty  # margin released
+                    if pos["qty"] >= 0:
+                        self._trades_completed += 1
+                        pos["avg_price"] = exec_price if pos["qty"] > 0 else 0.0
+                else:
+                    # Opening / adding to long
+                    total_cost = pos["avg_price"] * pos["qty"] + exec_price * qty
+                    pos["qty"] += qty
+                    pos["avg_price"] = total_cost / pos["qty"] if pos["qty"] else 0.0
+                    self.available_margin -= exec_price * qty  # margin consumed
             else:
-                realised = (exec_price - pos["avg_price"]) * qty
-                self._realised_pnl += (realised - BROKERAGE)
-                pos["qty"] -= qty
-                self.available_margin += exec_price * qty
-                if pos["qty"] == 0:
-                    pos["avg_price"] = 0.0
+                # ── SELL order ─────────────────────────────────────────
+                # Case A: closing a long (prev_qty > 0)
+                # Case B: opening a short (prev_qty == 0 or increasing short)
+                if prev_qty > 0:
+                    # Closing / reducing a long position → realise PnL
+                    closing_qty = min(qty, prev_qty)
+                    realised = (exec_price - pos["avg_price"]) * closing_qty
+                    self._realised_pnl += realised
+                    pos["qty"] -= qty   # move toward zero / negative
+                    self.available_margin += exec_price * closing_qty
+                    if pos["qty"] <= 0:
+                        self._trades_completed += 1
+                        pos["avg_price"] = exec_price if pos["qty"] < 0 else 0.0
+                else:
+                    # Opening / adding to short (short-sell: margin consumed)
+                    total_cost = pos["avg_price"] * abs(pos["qty"]) + exec_price * qty
+                    pos["qty"] -= qty   # goes more negative
+                    pos["avg_price"] = total_cost / abs(pos["qty"]) if pos["qty"] else 0.0
+                    self.available_margin -= exec_price * qty  # margin consumed for short
 
     def _ltp(self, symbol: str) -> float:
         """
@@ -278,20 +316,32 @@ class PaperBroker:
 
     def get_paper_summary(self) -> dict:
         with self._lock:
+            total_orders = len(self._orders)
             filled    = sum(1 for o in self._orders.values()
                             if o["status"] == "COMPLETE")
             cancelled = sum(1 for o in self._orders.values()
                             if o["status"] == "CANCELLED")
             open_cnt  = sum(1 for o in self._orders.values()
                             if o["status"] == "OPEN")
+            # Only count actual entry+exit fills (MARKET/LIMIT orders, not SL/target legs)
+            # Round-trips: each completed trade = 1 entry fill + 1 exit fill = 2 fills
+            round_trips = self._trades_completed
+            # Capital deployed = sum of currently open position value (unrealised exposure)
+            open_exposure = sum(
+                abs(pos["qty"]) * pos["avg_price"]
+                for pos in self._positions.values()
+                if pos["qty"] != 0
+            )
         return {
-            "total_orders":     len(self._orders),
+            "total_orders":     total_orders,
             "filled":           filled,
             "cancelled":        cancelled,
             "open":             open_cnt,
+            "trades_completed": round_trips,
             "realised_pnl":     round(self._realised_pnl, 2),
+            "total_brokerage":  round(self._total_brokerage, 2),
             "available_margin": round(self.available_margin, 2),
-            "capital_deployed": round(self.capital - self.available_margin, 2),
+            "capital_deployed": round(open_exposure, 2),
         }
 
     def stop(self):

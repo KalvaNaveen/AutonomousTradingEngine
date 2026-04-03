@@ -302,19 +302,45 @@ class DataAgent:
 
     def get_advance_decline_ratio(self) -> float:
         """
-        tick_store: count tokens where change_pct > 0.
-        REST fallback: quote all Nifty50 symbols.
+        Calculates AD ratio directly from live LTPs vs yesterday's close.
+        Robust for both Live Trading and Simulator environments.
         """
+        if self.daily_cache and self.daily_cache.is_loaded() and self.tick_store and self.tick_store.is_ready():
+            advances, declines = 0, 0
+            for token in self.UNIVERSE.keys():
+                closes = self.daily_cache.get_closes(token)
+                if not closes:
+                    continue
+                prev_close = closes[-1]
+                ltp = self.tick_store.get_ltp_if_fresh(token)
+                if ltp <= 0:
+                    continue
+                
+                if ltp > prev_close:
+                    advances += 1
+                elif ltp < prev_close:
+                    declines += 1
+            
+            total = advances + declines
+            if total > 0:
+                return advances / total
+                
+        # Fallback to tick_store's native change count (if tick store has live percentage change data but daily_cache failed)
         if self.tick_store and self.tick_store.is_ready():
             tokens  = list(self.UNIVERSE.keys())
             adv, dec = self.tick_store.get_advance_count(tokens)
             total   = adv + dec
-            return adv / total if total > 0 else 0.5
+            if total > 0:
+                return adv / total
+                
+        # Ultimate fallback (REST)
         try:
             tokens = [f"NSE:{s}" for s in self.FALLBACK_SYMBOLS]
             quotes = self.kite.quote(tokens)
-            adv    = sum(1 for q in quotes.values() if q.get("change", 0) > 0)
-            return adv / len(quotes) if quotes else 0.5
+            if not quotes:
+                return 0.5
+            adv    = sum(1 for q in quotes.values() if q.get("net_change", 0) > 0)
+            return adv / max(len(quotes), 1)
         except Exception:
             return 0.5
 

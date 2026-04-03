@@ -47,6 +47,29 @@ class Journal:
                     engine_stopped  INTEGER DEFAULT 0, stop_reason TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_logs (
+                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date    TEXT, time TEXT,
+                    agent   TEXT, action TEXT, detail TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_logs_date
+                ON agent_logs(date)
+            """)
+            conn.commit()
+
+    def log_agent_activity(self, agent: str, action: str, detail: str, timestamp_str: str):
+        date_str = timestamp_str[:10]  # if timestamp is ISO like 2026-04-01T... or we can use today's date
+        # Wait, the time string passed from api_server is just "HH:MM:SS".
+        from config import today_ist
+        date_str = today_ist().strftime("%Y-%m-%d")
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            conn.execute("""
+                INSERT INTO agent_logs (date, time, agent, action, detail)
+                VALUES (?, ?, ?, ?, ?)
+            """, (date_str, timestamp_str, agent, action, detail))
             conn.commit()
 
     def log_trade(self, trade: dict):
@@ -85,7 +108,11 @@ class Journal:
         """
         qty = trade.get("remaining_qty", trade.get("qty", 0))
         entry_price = trade.get("entry_price", 0)
-        pnl = (exit_price - entry_price) * qty
+        # Direction-aware P&L: shorts profit when price falls
+        if trade.get("is_short", False):
+            pnl = (entry_price - exit_price) * qty
+        else:
+            pnl = (exit_price - entry_price) * qty
         self.log_trade({
             **trade,
             "full_exit_price": exit_price,
@@ -234,4 +261,45 @@ class Journal:
              "gross_pnl": r[5], "exit_reason": r[6], "qty": r[7]}
             for r in rows
         ]
+        
+    def get_available_dates(self) -> list:
+        """Returns a list of all distinct dates in descending order."""
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            rows = conn.execute("SELECT DISTINCT date FROM trades ORDER BY date DESC").fetchall()
+        
+        # If no trades yet, check daily summary
+        if not rows:
+            with sqlite3.connect(JOURNAL_DB) as conn:
+                rows = conn.execute("SELECT DISTINCT date FROM daily_summary ORDER BY date DESC").fetchall()
+        
+        return [r[0] for r in rows]
+
+    def get_logs_for_date(self, date_str: str) -> list:
+        """Returns all agent logs for a given date in chronological order."""
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            rows = conn.execute("""
+                SELECT time, agent, action, detail
+                FROM agent_logs
+                WHERE date = ?
+                ORDER BY id ASC
+            """, (date_str,)).fetchall()
+        return [
+            {"time": r[0], "agent": r[1], "action": r[2], "detail": r[3]}
+            for r in rows
+        ]
+
+    def get_daily_summary_for_date(self, date_str: str) -> dict:
+        """Returns the single row summary for a given date."""
+        with sqlite3.connect(JOURNAL_DB) as conn:
+            row = conn.execute("""
+                SELECT total_trades, wins, losses, win_rate, gross_pnl, stop_reason, engine_stopped, regime
+                FROM daily_summary WHERE date = ?
+            """, (date_str,)).fetchone()
+        if not row:
+            return None
+        return {
+            "total_trades": row[0], "wins": row[1], "losses": row[2],
+            "win_rate": row[3], "gross_pnl": row[4], "stop_reason": row[5],
+            "engine_stopped": row[6] == 1, "regime": row[7]
+        }
 

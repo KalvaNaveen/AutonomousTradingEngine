@@ -149,6 +149,7 @@ def build_daily_report(
     nifty_price: float = 0.0,
     nifty_change_pct: float = 0.0,
     vix: float = 0.0,
+    real_capital: float = None,
 ) -> str:
     date_str = now_ist().strftime("%d %b %Y")
     pnl = stats.get("gross_pnl", 0)
@@ -243,9 +244,11 @@ def build_daily_report(
     # Capital Status
     lines.append("")
     lines.append("💼 *CAPITAL STATUS*")
-    lines.append(f"Starting: `Rs.{capital:,.0f}`")
-    lines.append(f"Closing: `Rs.{closing_capital:,.0f}`")
-    lines.append(f"Total Return: `{_pct(day_roi)}`")
+    lines.append(f"Simulated Starting: `Rs.{capital:,.0f}`")
+    lines.append(f"Simulated Closing: `Rs.{closing_capital:,.0f}`")
+    lines.append(f"Sim Total Return: `{_pct(day_roi)}`")
+    if real_capital is not None:
+        lines.append(f"🟢 *Real Zerodha Available*: `Rs.{real_capital:,.0f}`")
 
     # System Health
     lines.append("")

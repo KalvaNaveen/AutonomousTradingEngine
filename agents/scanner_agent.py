@@ -2,33 +2,33 @@
 ScannerAgent — New Strategies.MD (10-Strategy System)
 
 Implements ALL feasible strategies from New Strategies.MD:
-  S1_MA_CROSS      — Strategy 1: 9/21 EMA Crossover + ADX(14) + 200 EMA filter
-  S2_BB_MEAN_REV   — Strategy 2: BB(20,2σ) + RSI(14) + VWAP
-  S3_ORB           — Strategy 3: Opening Range Breakout (9:15-9:30 first candle)
-  S4_ARBITRAGE     — Strategy 4: Nifty/BankNifty Futures vs Spot mispricing (FUTURES ONLY)
-  S6_TREND_SHORT   — V18 Trend Breakout Short (kept: VWAP + RSI + relative weakness)
-  S6_VWAP_BAND     — Strategy 6: VWAP ± 1.5 SD mean reversion
-  S7_MEAN_REV_LONG — V18 Mean Reversion Long (kept: BB + RSI(4) + VWAP deviation)
+S1_MA_CROSS      — Strategy 1: 9/21 EMA Crossover + ADX(14) + 200 EMA filter
+S2_BB_MEAN_REV   — Strategy 2: BB(20,2σ) + RSI(14) + VWAP
+S3_ORB           — Strategy 3: Opening Range Breakout (9:15-9:30 first candle)
+S4_ARBITRAGE     — Strategy 4: Nifty/BankNifty Futures vs Spot mispricing (FUTURES ONLY)
+S6_TREND_SHORT   — V18 Trend Breakout Short (kept: VWAP + RSI + relative weakness)
+S6_VWAP_BAND     — Strategy 6: VWAP ± 1.5 SD mean reversion
+S7_MEAN_REV_LONG — V18 Mean Reversion Long (kept: BB + RSI(4) + VWAP deviation)
     S8_VOL_PIVOT     — Strategy 8: Volume Profile + Pivot Point Breakout
     S9_MTF_MOMENTUM  — Strategy 9: Daily 200 EMA + 15-min RSI + MACD crossover
 
 Strategies NOT implemented (hard infrastructure requirements):
-  Strategy 5:  Pairs Trading/StatArb (needs cointegration testing + separate universe)
-  Strategy 7:  Options Iron Condor (OPTIONS — explicitly excluded per user requirement)
-  Strategy 10: ML Hybrid (needs Random Forest training pipeline)
+Strategy 5:  Pairs Trading/StatArb (needs cointegration testing + separate universe)
+Strategy 7:  Options Iron Condor (OPTIONS — explicitly excluded per user requirement)
+Strategy 10: ML Hybrid (needs Random Forest training pipeline)
 
 S4 FUTURES POLICY (strict):
-  - ONLY index futures (NIFTY FUT, BANKNIFTY FUT) — NO options, NO stock futures
-  - instrument_type == "FUT" filter enforced in DataAgent.load_futures_tokens()
-  - Two-leg order: Long futures + Short spot ETF surrogate (or vice versa)
-  - Entry: mispricing > 0.15% from fair value (MD line 115)
-  - Exit: convergence to 0.05% OR 30-min max hold (MD line 117)
+- ONLY index futures (NIFTY FUT, BANKNIFTY FUT) — NO options, NO stock futures
+- instrument_type == "FUT" filter enforced in DataAgent.load_futures_tokens()
+- Two-leg order: Long futures + Short spot ETF surrogate (or vice versa)
+- Entry: mispricing > 0.15% from fair value (MD line 115)
+- Exit: convergence to 0.05% OR 30-min max hold (MD line 117)
 
 Universal Risk Rules (MD lines 26-48) enforced across all strategies:
-  - Max 5 concurrent positions
-  - VIX > 25 = stop all trades
-  - Daily max loss 2% = engine stopped
-  - All intraday positions exit by 3:20 PM
+- Max 5 concurrent positions
+- VIX > 25 = stop all trades
+- Daily max loss 2% = engine stopped
+- All intraday positions exit by 3:20 PM
 """
 
 import datetime
@@ -40,9 +40,9 @@ from config import *
 class ScannerAgent:
 
     def __init__(self, data_agent: DataAgent, blackout_calendar,
-                 fundamental_agent=None, stage_agent=None,
-                 vcp_agent=None, market_status_agent=None,
-                 sector_agent=None):
+                fundamental_agent=None, stage_agent=None,
+                vcp_agent=None, market_status_agent=None,
+                sector_agent=None):
         self.data       = data_agent
         self.blackout   = blackout_calendar
         # Legacy args accepted but unused (prevents import crashes)
@@ -62,6 +62,15 @@ class ScannerAgent:
         # Values: {"token": int, "symbol": str, "expiry": date}
         # STRICT: ONLY futures (instrument_type == "FUT"). NO options ever.
         self._futures_tokens: dict = {}
+        # ── S6 VWAP session guard (max 2 trades/day + 90-min loss cooloff) ──
+        self._s6v_trades_today  = 0
+        self._s6v_trade_date    = None
+        self._s6v_last_loss_time = None   # datetime of last S6V stop-loss exit
+        # ── Symbol cooldown after stop-loss (2 sessions) ──
+        self._symbol_cooldown: dict = {}  # symbol -> sessions_remaining
+        # ── Daily P&L circuit breaker ──
+        self._daily_pnl         = 0.0
+        self._daily_pnl_date    = None
 
     # ══════════════════════════════════════════════════════════════
     #  REGIME DETECTION
@@ -86,7 +95,13 @@ class ScannerAgent:
             ema_25    = self.data.daily_cache.get_ema25(NIFTY50_TOKEN)
             ts        = self.data.tick_store
             nifty_ltp = (ts.get_ltp_if_fresh(NIFTY50_TOKEN)
-                         if ts and ts.is_fresh() else 0.0)
+                        if ts and ts.is_fresh() else 0.0)
+            if nifty_ltp <= 0.0:
+                try:
+                    q = self.data.kite.quote(["NSE:NIFTY 50"])
+                    nifty_ltp = q.get("NSE:NIFTY 50", {}).get("last_price", 0.0)
+                except Exception:
+                    pass
             above_ema = nifty_ltp > ema_25 if nifty_ltp > 0 else False
         else:
             hist = self.data.get_daily_ohlcv(NIFTY50_TOKEN, days=60)
@@ -104,12 +119,12 @@ class ScannerAgent:
             print(f"[Regime] BEAR_PANIC — VIX={vix:.1f} AD={ad_ratio:.2f}")
             return "BEAR_PANIC"
 
-        if vix < VIX_BULL_MAX and above_ema and ad_ratio > 0.60:
+        if vix < VIX_BEAR_PANIC and above_ema and ad_ratio > 0.60:
             print(f"[Regime] BULL — VIX={vix:.1f} AD={ad_ratio:.2f}")
             return "BULL"
 
-        # ── VOLATILE: VIX 18–22.5 (elevated but not panic) ──
-        if VIX_BULL_MAX <= vix <= VIX_BEAR_PANIC:
+        # ── VOLATILE: VIX 18–30 (elevated but not bear panic) ──
+        if VIX_BULL_MAX <= vix < VIX_EXTREME_STOP:
             print(f"[Regime] VOLATILE — VIX={vix:.1f} AD={ad_ratio:.2f}")
             return "VOLATILE"
 
@@ -140,6 +155,9 @@ class ScannerAgent:
 
     def _check_daily_trade_limit(self) -> bool:
         """Returns True if we can still trade today (< MAX_TRADES_PER_DAY)."""
+        if self.circuit_breaker_tripped():
+            return False
+            
         today = now_ist().date()
         if self._daily_trade_date != today:
             self._daily_trade_count = 0
@@ -166,6 +184,66 @@ class ScannerAgent:
         if t >= datetime.time(15, 0):
             return False, "AFTER_LAST_ENTRY"
         return True, "OK"
+
+    # ── Session / circuit breaker / cooldown helpers ────────────
+
+    def new_session(self, date=None):
+        """Call at start of each trading day to reset daily state."""
+        self._daily_pnl = 0.0
+        self._daily_pnl_date = date
+        self._s6v_trades_today = 0
+        self._s6v_trade_date = date
+        self._s6v_last_loss_time = None
+        # Decrement symbol cooldowns
+        expired = [k for k, v in self._symbol_cooldown.items() if v <= 1]
+        for k in expired:
+            del self._symbol_cooldown[k]
+        for k in self._symbol_cooldown:
+            self._symbol_cooldown[k] -= 1
+
+    def circuit_breaker_tripped(self) -> bool:
+        """Returns True if daily loss exceeds -1.5% of capital → halt new entries."""
+        return self._daily_pnl < -(TOTAL_CAPITAL * DAILY_LOSS_LIMIT_PCT)
+
+    def record_pnl(self, pnl: float):
+        """Call after any trade closes to update daily P&L tracker."""
+        self._daily_pnl += pnl
+
+    def add_symbol_cooldown(self, symbol: str, sessions: int = 2):
+        """Call after any STOP_LOSS exit to block re-entry for N sessions."""
+        self._symbol_cooldown[symbol] = sessions
+
+    def is_symbol_on_cooldown(self, symbol: str) -> bool:
+        return self._symbol_cooldown.get(symbol, 0) > 0
+
+    def can_s6v_trade(self, current_time=None) -> bool:
+        """S6_VWAP_BAND session guard: max 2 trades/day + 90-min loss cooloff."""
+        today = now_ist().date()
+        if self._s6v_trade_date != today:
+            self._s6v_trades_today = 0
+            self._s6v_trade_date = today
+            self._s6v_last_loss_time = None
+        if self._s6v_trades_today >= 5:
+            return False
+        if self._s6v_last_loss_time and current_time:
+            # 90-min cooloff after loss
+            if hasattr(current_time, 'timestamp') and hasattr(self._s6v_last_loss_time, 'timestamp'):
+                elapsed = (current_time.timestamp() - self._s6v_last_loss_time.timestamp()) / 60
+                if elapsed < 90:
+                    return False
+        return True
+
+    def register_s6v_trade(self):
+        """Call after an S6_VWAP_BAND trade executes."""
+        today = now_ist().date()
+        if self._s6v_trade_date != today:
+            self._s6v_trades_today = 0
+            self._s6v_trade_date = today
+        self._s6v_trades_today += 1
+
+    def on_s6v_loss(self, exit_time):
+        """Call after an S6_VWAP_BAND stop-loss exit."""
+        self._s6v_last_loss_time = exit_time
 
     # ── Internal helpers ──────────────────────────────────────────
 
@@ -201,6 +279,31 @@ class ScannerAgent:
             })
         return bars_15
 
+    def _check_order_book_filter(self, token: int, is_short: bool) -> bool:
+        """
+        [V19 Order Book Filter]
+        Checks L2 depth to prevent trading against massive institutional walls.
+        Returns True if SAFE to trade, False if blocked by imbalance.
+        """
+        if not self.data.tick_store: return True
+        depth = self.data.tick_store.get_depth(token)
+        if not depth: return True
+        
+        ratio = depth.get("bid_ask_ratio", 1.0)
+        
+        if is_short:
+            # We want to SHORT. If bids (buyers) overwhelm asks by > 2x, block it.
+            if ratio > 2.0:
+                print(f"[Filter] Blocked Short on {token}: Massive buy wall (Ratio: {ratio:.1f})")
+                return False
+        else:
+            # We want to LONG. If asks (sellers) overwhelm bids (ratio < 0.5), block it.
+            if ratio < 0.5:
+                print(f"[Filter] Blocked Long on {token}: Massive sell wall (Ratio: {ratio:.1f})")
+                return False
+                
+        return True
+
     # ══════════════════════════════════════════════════════════════
     #  STRATEGY 1: MOVING AVERAGE CROSSOVER (MD lines 51-67)
     # ══════════════════════════════════════════════════════════════
@@ -211,13 +314,13 @@ class ScannerAgent:
         Best Regime: Trending (bull/bear). Timeframe: 15-min.
 
         Entry:
-          Long:  9 EMA crosses above 21 EMA AND ADX > 25 AND price > 200 EMA
-          Short: 9 EMA crosses below 21 EMA AND ADX > 25 AND price < 200 EMA
+        Long:  9 EMA crosses above 21 EMA AND ADX > 25 AND price > 200 EMA
+        Short: 9 EMA crosses below 21 EMA AND ADX > 25 AND price < 200 EMA
 
         Exit:
-          Target: 1:3 RR
-          Stop: 1.5 × ATR(14) below/above entry
-          Trailing: Move SL to breakeven after 1:1 RR
+        Target: 1:3 RR
+        Stop: 1.5 × ATR(14) below/above entry
+        Trailing: Move SL to breakeven after 1:1 RR
 
         Risk: Max 1% per trade. No trade if ADX < 25.
         """
@@ -289,8 +392,15 @@ class ScannerAgent:
             if atr <= 0:
                 atr = current * 0.015
 
-            if cross_up and is_above_200:
-                # Long: 9 EMA crosses above 21 EMA AND price > 200 EMA
+            # [PATCH 7] EMA21 slope filter: ema21 must be rising for longs, falling for shorts
+            if len(ema21_series) >= 4:
+                ema21_slope_up   = ema21_series[-1] > ema21_series[-3]
+                ema21_slope_down = ema21_series[-1] < ema21_series[-3]
+            else:
+                ema21_slope_up = ema21_slope_down = False
+
+            if cross_up and is_above_200 and ema21_slope_up:
+                # Long: 9 EMA crosses above 21 EMA AND price > 200 EMA AND ema21 rising
                 stop_price   = round(current - S1_ATR_SL_MULT * atr, 2)
                 risk_per_share = current - stop_price
                 if risk_per_share <= 0:
@@ -316,8 +426,8 @@ class ScannerAgent:
                     "entry_date":  None,
                 })
 
-            elif cross_down and not is_above_200:
-                # Short: 9 EMA crosses below 21 EMA AND price < 200 EMA
+            elif cross_down and not is_above_200 and ema21_slope_down:
+                # Short: 9 EMA crosses below 21 EMA AND price < 200 EMA AND ema21 falling
                 stop_price   = round(current + S1_ATR_SL_MULT * atr, 2)
                 risk_per_share = stop_price - current
                 if risk_per_share <= 0:
@@ -355,13 +465,13 @@ class ScannerAgent:
         Best Regime: Sideways/choppy. Timeframe: 5-min or 15-min.
 
         Entry:
-          Long:  Price touches lower BB AND RSI < 30 AND price > VWAP (bullish bias)
-          Short: Price touches upper BB AND RSI > 70 AND price < VWAP
+        Long:  Price touches lower BB AND RSI < 30 AND price > VWAP (bullish bias)
+        Short: Price touches upper BB AND RSI > 70 AND price < VWAP
 
         Exit:
-          Target: Middle BB or 1:2 RR
-          Stop: 1 × ATR below/above entry
-          Time exit: EOD or 30-min hold max
+        Target: Middle BB or 1:2 RR
+        Stop: 1 × ATR below/above entry
+        Time exit: EOD or 30-min hold max
 
         Risk: 0.5% max. Avoid if VIX > 20.
         """
@@ -392,7 +502,7 @@ class ScannerAgent:
                 intra_ranges = [c["high"] - c["low"] for c in candles_today[-6:]]
                 avg_intra_range = float(np.mean(intra_ranges))
                 daily_atr = self.data.daily_cache.get_atr(token)
-                if daily_atr > 0 and avg_intra_range > daily_atr * 0.50:
+                if daily_atr > 0 and avg_intra_range > daily_atr * 0.80:
                     continue
 
             # ── Bollinger Bands from 5-min closes ──
@@ -424,8 +534,23 @@ class ScannerAgent:
             if atr <= 0:
                 atr = current * 0.015
 
-            if current <= bb_lo and rsi_val < S2_RSI_OVERSOLD and vwap_dev > -0.03:
-                # Long: price touches lower BB AND RSI < 30 AND vwap_dev > -0.03
+            sma200 = self.data.daily_cache.get_sma200(token)
+
+            # [PATCH 1] RVOL gate: require minimum volume confirmation
+            rvol = self.data.compute_rvol(token)
+            if rvol < 1.2:
+                continue
+
+            # [PATCH 1] Need at least 2 candles for close-back confirmation
+            if len(candles) < 2:
+                continue
+            prev_candle = candles[-2]
+            curr_candle = candles[-1]
+
+            # [PATCH 1] Close-back-inside-band confirmation (not touch entry)
+            # Long: prev candle closed BELOW lower BB, current closes BACK ABOVE it
+            if prev_candle["close"] < bb_lo and curr_candle["close"] > bb_lo and rsi_val < S2_RSI_OVERSOLD and vwap_dev > -0.03 and (sma200 <= 0 or current >= sma200):
+                # Long: BB close-back confirmation + RSI < 30 + VWAP dev > -3%
                 stop_price   = round(current - S2_ATR_SL_MULT * atr, 2)
                 target_price = round(bb_mid, 2)   # revert to middle BB
                 risk_per_share = current - stop_price
@@ -452,8 +577,9 @@ class ScannerAgent:
                     "entry_date":   None,
                 })
 
-            elif current >= bb_hi and rsi_val > S2_RSI_OVERBOUGHT and vwap_dev < 0.03:
-                # Short: price touches upper BB AND RSI > 70 AND vwap_dev < 0.03
+            # [PATCH 1] Short: prev candle closed ABOVE upper BB, current closes BACK BELOW it
+            elif prev_candle["close"] > bb_hi and curr_candle["close"] < bb_hi and rsi_val > S2_RSI_OVERBOUGHT and vwap_dev < 0.03:
+                # Short: BB close-back confirmation + RSI > 70 + VWAP dev < 3%
                 stop_price   = round(current + S2_ATR_SL_MULT * atr, 2)
                 target_price = round(bb_mid, 2)
                 risk_per_share = stop_price - current
@@ -485,162 +611,80 @@ class ScannerAgent:
     # ══════════════════════════════════════════════════════════════
     #  STRATEGY 3: OPENING RANGE BREAKOUT (MD lines 87-106)
     # ══════════════════════════════════════════════════════════════
-
-    def scan_s3_orb(self) -> list:
-        """
-        MD Strategy 3: Opening Range Breakout (ORB)
-        Best Regime: Volatile/trending days. Timeframe: 15-min.
-
-        Mark High/Low of 9:15-9:30 AM candle (TickStore tracks this).
-        Long:  First 15-min candle closes above range High + volume > average
-        Short: First 15-min candle closes below range Low + volume > average
-
-        Entry window: 9:30 AM - 2:00 PM only.
-        Stop: Opposite side of range.
-        Target: 1.5× range size (MD: 1–2× preferred).
-        Trailing: Pivot-based after 1:1 RR.
-        Mandatory exit by 3:20 PM.
-
-        Risk: 0.75% max. Max 2 trades/day. Skip Thursdays (expiry).
-        """
-        now = now_ist()
-        t   = now.time()
-
-        # Entry window: 9:30 AM - S3_ENTRY_END
-        eh, em = map(int, S3_ENTRY_END.split(':'))
-        if not (datetime.time(9, 30) <= t <= datetime.time(eh, em)):
+    # ══════════════════════════════════════════════════════════════
+    #  S3_ORB — MADE STRICT FOR PROFITABILITY (V19.3)
+    # ══════════════════════════════════════════════════════════════
+    def scan_s3_orb(self, regime: str) -> list:
+        if not self.is_in_trade_window():
             return []
-
-        # Skip expiry days robustly (Wed/Thu checks + blackout integration)
-        if self.blackout and self.blackout.is_blackout():
+        if regime not in ["BULL", "VOLATILE"]:   # Only strong regimes
             return []
-        if now.weekday() == 3:  # Skip Thursday only (NSE weekly expiry)
+        if not self._check_daily_trade_limit():
             return []
-
-        # Max 2 trades/day (MD rule, line 103)
-        _today = now.date()
-        if self._s3_trade_date != _today:
-            self._s3_trades_today = 0
-            self._s3_trade_date = _today
-        if self._s3_trades_today >= S3_MAX_TRADES:
-            return []
-
         if not self._cache_ts_ready():
             return []
 
-        signals = []
-
-        for token, symbol in self.data.UNIVERSE.items():
-            if self.blackout and self.blackout.is_blackout():
-                continue
-
-            # ── ORB from TickStore (locked after 9:30) ──
-            orb = self.data.tick_store.get_orb(token)
-            orb_high = orb.get("orb_high", 0)
-            orb_low  = orb.get("orb_low", 999999)
-            orb_locked = orb.get("orb_locked", False)
-
-            if not orb_locked or orb_high <= 0 or orb_low >= 999999:
-                continue    # ORB not yet locked or no data
-
-            orb_range = orb_high - orb_low
-            if orb_range <= 0:
-                continue
-
-            current  = self.data.tick_store.get_ltp_if_fresh(token)
-            if current <= 0:
-                continue
-
-            # ── Volume confirmation: current RVOL must beat average ──
-            rvol = self.data.compute_rvol(token)
-            if rvol < 1.0:         # Must exceed average volume
-                continue
-
-            atr = self.data.daily_cache.get_atr(token)
-            if atr <= 0:
-                atr = orb_range
-
-            # ── Long breakout: price breaks above ORB high ──
-            if current > orb_high:
-                now_t = now_ist().time()
-                earliest_valid = datetime.time(9, 30)
-                latest_entry_fresh = datetime.time(9, 50)  # 20-min window
-                if not (earliest_valid <= now_t <= latest_entry_fresh):
-                    if current > orb_high + atr:
-                        continue
-                # Stop: ATR below entry (tight, just under breakout candle)
-                # NOT orb_low — that would make risk = full range + gap, killing RR
-                stop_price   = round(current - max(atr, orb_range * 0.5), 2)
-                risk         = current - stop_price
-                if risk <= 0:
-                    continue
-                target_price = round(current + S3_TARGET_MULT * 2 * risk, 2)  # 3R target
-                # Sanity: target must be meaningfully above ORB high
-                if target_price <= orb_high:
-                    target_price = round(orb_high + S3_TARGET_MULT * orb_range, 2)
-                signals.append({
-                    "strategy":     "S3_ORB",
-                    "symbol":       symbol,
-                    "token":        token,
-                    "regime":       "ANY",
-                    "entry_price":  current,
-                    "stop_price":   stop_price,
-                    "target_price": target_price,
-                    "orb_high":     round(orb_high, 2),
-                    "orb_low":      round(orb_low, 2),
-                    "orb_range":    round(orb_range, 2),
-                    "rvol":         round(rvol, 2),
-                    "product":      "MIS",
-                    "is_short":     False,
-                    "exit_by":      S3_EXIT_TIME,
-                    "entry_time":   None,
-                    "entry_date":   None,
-                })
-
-            # ── Short breakout: price breaks below ORB low ──
-            elif current < orb_low:
-                now_t = now_ist().time()
-                earliest_valid = datetime.time(9, 30)
-                latest_entry_fresh = datetime.time(9, 50)  # 20-min window
-                if not (earliest_valid <= now_t <= latest_entry_fresh):
-                    if current < orb_low - atr:
-                        continue
-                # Stop: ATR above entry (tight, just above breakout point)
-                stop_price   = round(current + max(atr, orb_range * 0.5), 2)
-                risk         = stop_price - current
-                if risk <= 0:
-                    continue
-                target_price = round(current - S3_TARGET_MULT * 2 * risk, 2)  # 3R target
-                if target_price >= orb_low:
-                    target_price = round(orb_low - S3_TARGET_MULT * orb_range, 2)
-                signals.append({
-                    "strategy":     "S3_ORB",
-                    "symbol":       symbol,
-                    "token":        token,
-                    "regime":       "ANY",
-                    "entry_price":  current,
-                    "stop_price":   stop_price,
-                    "target_price": target_price,
-                    "orb_high":     round(orb_high, 2),
-                    "orb_low":      round(orb_low, 2),
-                    "orb_range":    round(orb_range, 2),
-                    "rvol":         round(rvol, 2),
-                    "product":      "MIS",
-                    "is_short":     True,
-                    "exit_by":      S3_EXIT_TIME,
-                    "entry_time":   None,
-                    "entry_date":   None,
-                })
-
-        return sorted(signals, key=lambda x: x["rvol"], reverse=True)[:2]
-
-    def register_s3_trade(self):
-        """Call after an S3 ORB trade executes (tracks 2/day limit)."""
+        # Max 5 S3 trades per day (was 1 — too restrictive)
         today = now_ist().date()
-        if self._s3_trade_date != today:
-            self._s3_trades_today = 0
+        if self._s3_trade_date == today and self._s3_trades_today >= 5:
+            return []
+
+        signals = []
+        for token, symbol in self.data.UNIVERSE.items():
+            current = self.data.tick_store.get_ltp_if_fresh(token)
+            if current <= 0 or current < 800:   # Higher min price
+                continue
+
+            rvol = self.data.compute_rvol(token)
+            if rvol < 2.0:   # Strong volume only
+                continue
+
+            # Get ORB from tick_store (already locked at 09:30)
+            orb_dict = self.data.tick_store.get_orb(token)
+            orb_high = orb_dict.get("orb_high", 0.0)
+            orb_low  = orb_dict.get("orb_low", 0.0)
+            if orb_high <= 0 or orb_low <= 0:
+                continue
+
+            atr = self.data.daily_cache.get_atr(token) or (current * 0.015)
+
+            # LONG
+            if current > orb_high + atr * 0.3:
+                if not self._check_order_book_filter(token, is_short=False):
+                    continue
+                stop_price = round(orb_low - atr * 0.2, 2)
+                risk = current - stop_price
+                if risk <= 0: continue
+                target_price = round(current + 2.5 * risk, 2)   # Higher RR
+                signals.append({
+                    "strategy": "S3_ORB", "symbol": symbol, "token": token,
+                    "regime": regime, "entry_price": current,
+                    "stop_price": stop_price, "target_price": target_price,
+                    "rvol": round(rvol, 2), "is_short": False
+                })
+
+            # SHORT
+            elif current < orb_low - atr * 0.3:
+                if not self._check_order_book_filter(token, is_short=True):
+                    continue
+                stop_price = round(orb_high + atr * 0.2, 2)
+                risk = stop_price - current
+                if risk <= 0: continue
+                target_price = round(current - 2.5 * risk, 2)
+                signals.append({
+                    "strategy": "S3_ORB", "symbol": symbol, "token": token,
+                    "regime": regime, "entry_price": current,
+                    "stop_price": stop_price, "target_price": target_price,
+                    "rvol": round(rvol, 2), "is_short": True
+                })
+
+        # Register if any signal (even if not executed)
+        if signals:
             self._s3_trade_date = today
-        self._s3_trades_today += 1
+            self._s3_trades_today += 1
+
+        return sorted(signals, key=lambda x: x["rvol"], reverse=True)[:1]
+
 
     # ══════════════════════════════════════════════════════════════
     #  S6: TREND BREAKOUT SHORT (kept from V18)
@@ -721,7 +765,13 @@ class ScannerAgent:
             if atr <= 0:
                 atr = current * 0.02
 
-            stop_price  = round(current + atr * 1.0, 2)
+            # [V19 Order Book Imbalance Filter]
+            # Since S6 is a short-only strategy, check against massive buy walls
+            if not self._check_order_book_filter(token, is_short=True):
+                continue
+
+            # [V19 Optimized] Ultra-tight Intraday SL to maximize size and force early exits
+            stop_price  = round(current + atr * 0.4, 2)
             risk = stop_price - current
             if risk <= 0: continue
             target_1    = round(current - risk * 1.5, 2)
@@ -755,20 +805,6 @@ class ScannerAgent:
     # ══════════════════════════════════════════════════════════════
 
     def scan_s6_vwap_band(self, regime: str) -> list:
-        """
-        MD Strategy 6: VWAP Mean Reversion
-        Best Regime: Intraday any regime. Timeframe: 5-min.
-
-        Entry:
-          Long:  Price < VWAP - 1.5 SD AND stock in uptrend (price > SMA200)
-          Short: Price > VWAP + 1.5 SD AND stock in downtrend (price < SMA200)
-
-        Exit:
-          Target: VWAP or 1:2 RR
-          Stop: 1 ATR
-
-        Risk: 0.5%
-        """
         if not self.is_in_trade_window():
             return []
         if not self._check_daily_trade_limit():
@@ -779,111 +815,68 @@ class ScannerAgent:
             return []
 
         signals = []
-
         for token, symbol in self.data.UNIVERSE.items():
             current = self.data.tick_store.get_ltp_if_fresh(token)
-            if current <= 0:
+            if current <= 0 or current < 400:  # higher min price
                 continue
 
-            # Intraday ATR check — skip if stock is trending today (not ranging)
-            candles_today = self.data.get_intraday_ohlcv(token, "5minute")
-            if len(candles_today) >= 6:
-                intra_ranges = [c["high"] - c["low"] for c in candles_today[-6:]]
-                avg_intra_range = float(np.mean(intra_ranges))
-                daily_atr = self.data.daily_cache.get_atr(token)
-                if daily_atr > 0 and avg_intra_range > daily_atr * 0.50:
-                    continue
+            if self.data.get_avg_daily_turnover_cr(token) < 40:
+                continue
 
             vwap = self.data.tick_store.get_vwap(token)
             if vwap <= 0:
                 continue
 
-            # ── Compute VWAP standard deviation from 5-min candle closes ──
             candles = self.data.get_intraday_ohlcv(token, "5minute")
-            if len(candles) < 10:
+            if len(candles) < 20:
                 continue
-            cum_pv2 = sum(c["close"]**2 * c["volume"] for c in candles)
-            cum_vol = sum(c["volume"] for c in candles)
-            if cum_vol == 0:
-                continue
-            vwap_sd = (cum_pv2 / cum_vol - vwap**2) ** 0.5 if (cum_pv2 / cum_vol - vwap**2) > 0 else 0
+            closes = [c["close"] for c in candles]
+            vwap_series = [self.data.tick_store.get_vwap(token) for _ in closes]  # approx
+            # Use real SD from recent closes
+            _, _, vwap_sd = DataAgent.compute_bollinger(closes[-20:], 20, S6_VWAP_SD)
             if vwap_sd <= 0:
+                vwap_sd = current * 0.008
+
+            rvol = self.data.compute_rvol(token)
+            if rvol < 1.5:
                 continue
 
-            vwap_upper = vwap + S6_VWAP_SD * vwap_sd
-            vwap_lower = vwap - S6_VWAP_SD * vwap_sd
+            # RSI extreme required
+            rsi = (DataAgent.compute_rsi(closes, 14) or [50])[-1]
 
-            # ── Higher TF trend filter ──
-            sma200 = self.data.daily_cache.get_sma200(token)
-            if sma200 <= 0:
-                continue
-
-            atr = self.data.daily_cache.get_atr(token)
-            if atr <= 0:
-                atr = current * 0.015
-
-            if current < vwap_lower and current > sma200:
-                # Long: price < VWAP - 1.5 SD in uptrend
-                stop_price   = round(current - atr, 2)
-                target_price = round(vwap, 2)
+            # LONG
+            if (current < vwap - 1.8 * vwap_sd and rsi < 35 and
+                regime in ["CHOP", "NORMAL"]):
+                stop_price = round(current - 1.2 * vwap_sd, 2)
                 risk = current - stop_price
-                if risk <= 0:
-                    continue
-                # Ensure minimum RR: if VWAP-to-entry gap < RR*risk, use RR target
-                if (target_price - current) < S6_VWAP_RR * risk:
-                    target_price = round(current + S6_VWAP_RR * risk, 2)
-                signals.append({
-                    "strategy":     "S6_VWAP_BAND",
-                    "symbol":       symbol,
-                    "token":        token,
-                    "regime":       regime,
-                    "entry_price":  current,
-                    "stop_price":   stop_price,
-                    "target_price": target_price,
-                    "vwap":         round(vwap, 2),
-                    "vwap_lower":   round(vwap_lower, 2),
-                    "vwap_sd":      round(vwap_sd, 2),
-                    "atr":          round(atr, 2),
-                    "product":      "MIS",
-                    "is_short":     False,
-                    "max_hold_days": 0,
-                    "entry_time":   None,
-                    "entry_date":   None,
-                })
-
-            elif current > vwap_upper and current < sma200:
-                # Short: price > VWAP + 1.5 SD in downtrend
-                stop_price   = round(current + atr, 2)
+                if risk <= 0: continue
                 target_price = round(vwap, 2)
-                risk = stop_price - current
-                if risk <= 0:
-                    continue
-                # Ensure minimum RR: if entry-to-VWAP gap < RR*risk, use RR target
-                if (current - target_price) < S6_VWAP_RR * risk:
-                    target_price = round(current - S6_VWAP_RR * risk, 2)
+                if (target_price - current) < 2.0 * risk:
+                    target_price = round(current + 2.0 * risk, 2)
                 signals.append({
-                    "strategy":     "S6_VWAP_BAND",
-                    "symbol":       symbol,
-                    "token":        token,
-                    "regime":       regime,
-                    "entry_price":  current,
-                    "stop_price":   stop_price,
-                    "target_price": target_price,
-                    "vwap":         round(vwap, 2),
-                    "vwap_upper":   round(vwap_upper, 2),
-                    "vwap_sd":      round(vwap_sd, 2),
-                    "atr":          round(atr, 2),
-                    "product":      "MIS",
-                    "is_short":     True,
-                    "max_hold_days": 0,
-                    "entry_time":   None,
-                    "entry_date":   None,
+                    "strategy": "S6_VWAP_BAND", "symbol": symbol, "token": token,
+                    "regime": regime, "entry_price": current, "stop_price": stop_price,
+                    "target_price": target_price, "vwap": round(vwap, 2),
+                    "rvol": round(rvol, 2), "rsi": round(rsi, 1), "is_short": False
                 })
 
-        # Sort by deviation from VWAP (deepest extremes first)
-        return sorted(signals,
-                      key=lambda x: abs(x["entry_price"] - x["vwap"]),
-                      reverse=True)[:3]
+            # SHORT
+            elif (current > vwap + 1.8 * vwap_sd and rsi > 65 and
+                regime in ["CHOP", "NORMAL"]):
+                stop_price = round(current + 1.2 * vwap_sd, 2)
+                risk = stop_price - current
+                if risk <= 0: continue
+                target_price = round(vwap, 2)
+                if (current - target_price) < 2.0 * risk:
+                    target_price = round(current - 2.0 * risk, 2)
+                signals.append({
+                    "strategy": "S6_VWAP_BAND", "symbol": symbol, "token": token,
+                    "regime": regime, "entry_price": current, "stop_price": stop_price,
+                    "target_price": target_price, "vwap": round(vwap, 2),
+                    "rvol": round(rvol, 2), "rsi": round(rsi, 1), "is_short": True
+                })
+
+        return sorted(signals, key=lambda x: abs(x["entry_price"] - x["vwap"]), reverse=True)[:2]
 
     # ══════════════════════════════════════════════════════════════
     #  S7: MEAN REVERSION LONG (kept from V18)
@@ -1004,12 +997,12 @@ class ScannerAgent:
         S1 = 2 × Pivot - High (support 1)
 
         Entry:
-          Long:  Break above R1 pivot + volume spike > 1.5× average
-          Short: Break below S1 pivot + volume spike > 1.5× average
+        Long:  Break above R1 pivot + volume spike > 1.5× average
+        Short: Break below S1 pivot + volume spike > 1.5× average
 
         Exit:
-          Target: Next pivot level (R2 / S2)
-          Stop: Below/above previous pivot
+        Target: Next pivot level (R2 / S2)
+        Stop: Below/above previous pivot
 
         Risk: 0.75%. Trailing to next level.
         """
@@ -1022,11 +1015,20 @@ class ScannerAgent:
         if not self._cache_ts_ready():
             return []
 
+        # [PATCH 4] Start at 10:00 not 09:45
+        now_t = now_ist().time()
+        if now_t < datetime.time(10, 0):
+            return []
+
         signals = []
 
         for token, symbol in self.data.UNIVERSE.items():
             current = self.data.tick_store.get_ltp_if_fresh(token)
             if current <= 0:
+                continue
+
+            # Minimum stock price filter to avoid cost-killing low-price trades
+            if current < 300:
                 continue
 
             # ── Compute floor pivots from yesterday's daily bar ──
@@ -1054,16 +1056,36 @@ class ScannerAgent:
             if atr <= 0:
                 atr = current * 0.015
 
-            if current > r1:
-                # Long: break above R1 + volume spike
-                stop_price   = round(r1 - 0.5 * atr, 2)   # SL: just below r1
-                target_price = round(r2, 2)       # Target: R2
-                # Sanity guard: r2 must be above current (stock hasn't already blown past it)
-                if target_price <= current or r2 <= r1:
-                    continue
+            candles = self.data.get_intraday_ohlcv(token, "5minute")
+            if len(candles) < 2:
+                continue
+            curr_candle = candles[-1]
+            prev_candle = candles[-2]
+
+            # ── LONG: R1 breakout or pullback retest ──
+            # [PATCH 4] Standard: current candle closes above R1
+            r1_breakout = curr_candle["close"] > r1
+            # [PATCH 4] Pullback retest: prev broke R1, current pulled back to R1 & held
+            r1_retest   = (prev_candle["close"] > r1 and
+                        curr_candle["low"] <= r1 and
+                        curr_candle["close"] > r1)
+            long_signal = r1_breakout or r1_retest
+
+            if long_signal:
+                # [PATCH 4] Stop below R1 (the breakout level), with tiny buffer
+                stop_price   = round(r1 - 0.15 * atr, 2)
                 risk = current - stop_price
                 if risk <= 0:
+                    stop_price = round(current - 0.5 * atr, 2)
+                    risk = current - stop_price
+                if risk <= 0:
                     continue
+                target_price = round(r2, 2)       # Target: R2
+                # Sanity guard
+                if target_price <= current or r2 <= r1:
+                    continue
+                # [PATCH 4] Minimum RR floor of 1.5:1
+                target_price = max(target_price, round(current + 1.5 * risk, 2))
                 signals.append({
                     "strategy":     "S8_VOL_PIVOT",
                     "symbol":       symbol,
@@ -1085,117 +1107,127 @@ class ScannerAgent:
                     "entry_date":   None,
                 })
 
-            elif current < s1:
-                # Short: break below S1 + volume spike
-                stop_price   = round(s1 + 0.5 * atr, 2)   # SL: just above s1
-                target_price = round(s2, 2)       # Target: S2
-                # Sanity guard: s2 must be below entry (bad data can invert this)
-                if target_price >= current or s2 <= 0:
-                    continue
-                risk = stop_price - current
-                if risk <= 0:
-                    continue
-                signals.append({
-                    "strategy":     "S8_VOL_PIVOT",
-                    "symbol":       symbol,
-                    "token":        token,
-                    "regime":       regime,
-                    "entry_price":  current,
-                    "stop_price":   stop_price,
-                    "partial_target": round(current - 1.0 * risk, 2),
-                    "target_price": target_price,
-                    "pivot":        round(pivot, 2),
-                    "s1":           round(s1, 2),
-                    "s2":           round(s2, 2),
-                    "rvol":         round(rvol, 2),
-                    "atr":          round(atr, 2),
-                    "product":      "MIS",
-                    "is_short":     True,
-                    "max_hold_days": 0,
-                    "entry_time":   None,
-                    "entry_date":   None,
-                })
+            else:
+                # ── SHORT: S1 breakdown or pullback retest ──
+                s1_breakdown = curr_candle["close"] < s1
+                s1_retest    = (prev_candle["close"] < s1 and
+                                curr_candle["high"] >= s1 and
+                                curr_candle["close"] < s1)
+                short_signal = s1_breakdown or s1_retest
+
+                if short_signal:
+                    # [PATCH 4] Stop above S1 with tiny buffer
+                    stop_price   = round(s1 + 0.15 * atr, 2)
+                    risk = stop_price - current
+                    if risk <= 0:
+                        stop_price = round(current + 0.5 * atr, 2)
+                        risk = stop_price - current
+                    if risk <= 0:
+                        continue
+                    target_price = round(s2, 2)       # Target: S2
+                    if target_price >= current or s2 <= 0:
+                        continue
+                    # [PATCH 4] Minimum RR floor of 1.5:1
+                    target_price = min(target_price, round(current - 1.5 * risk, 2))
+                    signals.append({
+                        "strategy":     "S8_VOL_PIVOT",
+                        "symbol":       symbol,
+                        "token":        token,
+                        "regime":       regime,
+                        "entry_price":  current,
+                        "stop_price":   stop_price,
+                        "partial_target": round(current - 1.0 * risk, 2),
+                        "target_price": target_price,
+                        "pivot":        round(pivot, 2),
+                        "s1":           round(s1, 2),
+                        "s2":           round(s2, 2),
+                        "rvol":         round(rvol, 2),
+                        "atr":          round(atr, 2),
+                        "product":      "MIS",
+                        "is_short":     True,
+                        "max_hold_days": 0,
+                        "entry_time":   None,
+                        "entry_date":   None,
+                    })
 
         return sorted(signals, key=lambda x: x["rvol"], reverse=True)[:3]
 
     # ══════════════════════════════════════════════════════════════
     #  STRATEGY 9: MULTI-TIMEFRAME TREND + MOMENTUM (MD lines 192-207)
     # ══════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════
+    #  STRATEGY 9: MULTI-TIMEFRAME TREND + MOMENTUM (MD lines 192-207)
+    # ══════════════════════════════════════════════════════════════
 
     def scan_s9_mtf_momentum(self, regime: str) -> list:
-        """
-        MD Strategy 9: Multi-Timeframe Trend + Momentum Filter
-        Best Regime: Bull/bear confirmation. Timeframe: Daily + 15-min.
-
-        Entry:
-          Higher TF: Price > 200 EMA (uptrend) or < (downtrend)
-          Lower TF:  RSI > 50 + MACD crossover in trend direction
-
-        Exit:
-          Target: 1:3 RR
-          Stop: 2 × ATR
-
-        Risk: Dynamic sizing based on trend strength (ADX proxy).
-        """
+        """S9: Multi-Timeframe Trend + Momentum (Daily 200 EMA + 15-min RSI + MACD)"""
         if not self.is_in_trade_window():
             return []
-        if not self._check_daily_trade_limit():
+        if regime not in ["BULL", "NORMAL", "VOLATILE", "CHOP"]:   # CHOP allowed only with strong volume
             return []
-        if regime == "EXTREME_PANIC":
+        if not self._check_daily_trade_limit():
             return []
         if not self._cache_ts_ready():
             return []
 
-        # S9 needs enough 15-min bars for MACD — only valid after 11:30
-        now_t = now_ist().time()
-        if now_t < datetime.time(13, 15):  # Only in Window 2
-            return []
-
         signals = []
-
         for token, symbol in self.data.UNIVERSE.items():
             current = self.data.tick_store.get_ltp_if_fresh(token)
-            if current <= 0:
+            if current <= 0 or current < 300:
                 continue
 
-            # ── Higher TF: Daily 200 EMA trend filter ──
+            # Higher timeframe trend filter
             closes_d = self.data.daily_cache.get_closes(token)
             if len(closes_d) < S9_EMA_TREND + 5:
                 continue
-
             ema200_daily = DataAgent.compute_ema(closes_d, S9_EMA_TREND)[-1]
-            is_uptrend   = current > ema200_daily
+            is_uptrend = current > ema200_daily
 
-            # ── Lower TF: 5-min RSI > 50 + MACD crossover ──
+            # 5-minute data for momentum signals
             c_intra = self.data.get_intraday_ohlcv(token, "5minute")
-            if len(c_intra) < 26:      # Need 26 bars for MACD(12,26)
+            if len(c_intra) < 30:
                 continue
             c_closes = [c["close"] for c in c_intra]
 
+            # MACD crossover detection
+            macd_val, signal_val, _ = DataAgent.compute_macd(c_closes)
+            prev_closes = c_closes[:-1]
+            macd_prev, signal_prev, _ = DataAgent.compute_macd(prev_closes)
+
             rsi_15 = (DataAgent.compute_rsi(c_closes, S9_RSI_PERIOD) or [50])[-1]
-            macd_line_full = DataAgent._compute_macd_line(c_closes)
-            if len(macd_line_full) < 2:
+            rvol = self.data.compute_rvol(token)
+
+            # Volume filter (stricter in CHOP)
+            if regime == "CHOP" and rvol < 1.8:
                 continue
-                
-            macd_now  = macd_line_full[-1]
-            macd_prev = macd_line_full[-2]
-            
-            macd_cross_up   = macd_prev < 0 and macd_now > 0   # zero-line cross
-            macd_cross_down = macd_prev > 0 and macd_now < 0
+            if rvol < 1.3:
+                continue
+
+            # Extra ADX filter only in volatile regimes
+            if regime == "VOLATILE":
+                highs = [c["high"] for c in c_intra[-14:]]
+                lows = [c["low"] for c in c_intra[-14:]]
+                closes_short = c_closes[-14:]
+                adx = DataAgent.compute_adx(highs, lows, closes_short)
+                if adx < 22:
+                    continue
 
             atr = self.data.daily_cache.get_atr(token)
             if atr <= 0:
                 atr = current * 0.02
 
-            if (is_uptrend and
-                    rsi_15 > S9_RSI_THRESHOLD and    # RSI > 50 (bullish momentum)
-                    macd_cross_up):                   # MACD bullish crossover
-                # Long: uptrend + RSI > 50 + MACD crossover up
-                stop_price   = round(current - S9_ATR_SL_MULT * atr, 2)
+            # LONG ENTRY
+            if (is_uptrend and 
+                rsi_15 > S9_RSI_THRESHOLD and 
+                macd_prev < signal_prev and 
+                macd_val > signal_val):
+                
+                stop_price = round(current - S9_ATR_SL_MULT * atr, 2)
                 risk = current - stop_price
-                if risk <= 0:
+                if risk <= 0: 
                     continue
                 target_price = round(current + S9_RR * risk, 2)
+                
                 signals.append({
                     "strategy":     "S9_MTF_MOMENTUM",
                     "symbol":       symbol,
@@ -1207,8 +1239,9 @@ class ScannerAgent:
                     "target_price": target_price,
                     "ema200":       round(ema200_daily, 2),
                     "rsi15":        round(rsi_15, 2),
-                    "macd":         round(macd_now, 4),
-                    "macd_signal":  0.0,
+                    "macd":         round(macd_val, 4),
+                    "macd_signal":  round(signal_val, 4),
+                    "rvol":         round(rvol, 2),
                     "atr":          round(atr, 2),
                     "product":      "MIS",
                     "is_short":     False,
@@ -1217,15 +1250,18 @@ class ScannerAgent:
                     "entry_date":   None,
                 })
 
-            elif (not is_uptrend and
-                    rsi_15 < (100 - S9_RSI_THRESHOLD) and   # RSI < 50 (bearish)
-                    macd_cross_down):                         # MACD bearish crossover
-                # Short: downtrend + RSI < 50 + MACD crossover down
-                stop_price   = round(current + S9_ATR_SL_MULT * atr, 2)
+            # SHORT ENTRY
+            elif (not is_uptrend and 
+                  rsi_15 < (100 - S9_RSI_THRESHOLD) and 
+                  macd_prev > signal_prev and 
+                  macd_val < signal_val):
+                
+                stop_price = round(current + S9_ATR_SL_MULT * atr, 2)
                 risk = stop_price - current
-                if risk <= 0:
+                if risk <= 0: 
                     continue
                 target_price = round(current - S9_RR * risk, 2)
+                
                 signals.append({
                     "strategy":     "S9_MTF_MOMENTUM",
                     "symbol":       symbol,
@@ -1237,8 +1273,9 @@ class ScannerAgent:
                     "target_price": target_price,
                     "ema200":       round(ema200_daily, 2),
                     "rsi15":        round(rsi_15, 2),
-                    "macd":         round(macd_now, 4),
-                    "macd_signal":  0.0,
+                    "macd":         round(macd_val, 4),
+                    "macd_signal":  round(signal_val, 4),
+                    "rvol":         round(rvol, 2),
                     "atr":          round(atr, 2),
                     "product":      "MIS",
                     "is_short":     True,
@@ -1247,8 +1284,7 @@ class ScannerAgent:
                     "entry_date":   None,
                 })
 
-        return sorted(signals, key=lambda x: abs(x["rsi15"] - 50), reverse=True)[:3]
-
+        return sorted(signals, key=lambda x: abs(x.get("rsi15", 50) - 50), reverse=True)[:3]
     # ══════════════════════════════════════════════════════════════
     #  STRATEGY 4: CASH-FUTURES ARBITRAGE (MD lines 108-121)
     #  *** FUTURES ONLY — OPTIONS STRICTLY EXCLUDED ***

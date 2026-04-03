@@ -130,10 +130,10 @@ class MultiTimeframeSimulator:
         db = HistoricalDB()
 
         all_tokens = list(self.universe.keys()) + [NIFTY50_TOKEN, INDIA_VIX_TOKEN]
-        end = today_ist()
-        required_start_min = end - datetime.timedelta(days=self.days_back + 5)
+        end = today_ist() - datetime.timedelta(days=getattr(self, 'offset', 0))
+        required_start_min = end - datetime.timedelta(days=self.days_back + 14)
 
-        print(f"\n[Simulator] Loading {len(self.universe)} symbols x {self.days_back} days from SQLite DB...")
+        print(f"\n[Simulator] Loading {len(self.universe)} symbols x {self.days_back} days (offset {getattr(self, 'offset', 0)}) from SQLite DB...")
 
         # 1. Discover S4 futures tokens from Kite (FUTURES ONLY — no options)
         # COMMENTED OUT PER USER REQUEST
@@ -352,6 +352,21 @@ class MultiTimeframeSimulator:
         # ── 1. Data Fetching Phase ────────────────────────────────
         self.fetch_all_data()
 
+        # ── FIX S3 ORB MOCK (was causing the error you saw)
+        if not self.live_data.tick_store:
+            from storage.tick_store import TickStore
+            self.live_data.tick_store = TickStore()
+        if not hasattr(self.live_data.tick_store, '_orb'):
+            self.live_data.tick_store._orb = {}
+        for token in list(self.universe.keys()) + [NIFTY50_TOKEN]:
+            if token not in self.live_data.tick_store._orb:
+                self.live_data.tick_store._orb[token] = {
+                    "orb_high": 0.0,
+                    "orb_low": 0.0,
+                    "orb_locked": False
+                }
+        print("[Simulator] S3 ORB mock injected — S3 now active")
+
         # ── 1.5 REST API Firewall ──────────────────────────────────
         self.kite.quote = lambda x: {}
         self.kite.historical_data = lambda *args: []
@@ -363,8 +378,15 @@ class MultiTimeframeSimulator:
             print("[Simulator] FATAL: Not enough NIFTY history for SMA200 warmup.")
             return
 
-        sim_start = max(260, len(ref_bars) - self.days_back)
-        sim_end = len(ref_bars)
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--days", type=int, default=30)
+        parser.add_argument("--top", type=int, default=50)
+        parser.add_argument("--offset", type=int, default=0)
+        args, _ = parser.parse_known_args()
+
+        sim_end = len(ref_bars) - args.offset
+        sim_start = max(260, sim_end - self.days_back)
         total_executed = 0
         sig_counts = {"S1": 0, "S2": 0, "S3": 0, "S4": 0,
                       "S6": 0, "S6V": 0, "S7": 0, "S8": 0, "S9": 0}
@@ -379,8 +401,9 @@ class MultiTimeframeSimulator:
             daily_trade_count = 0  # Reset per day
             
             # 1. Setup morning regime & cache
+            self.scanner.new_session(today_date)
             self._mock_cache_for_day(date_str, day_idx)
-            
+
             # Inject VIX and Nifty into tick store
             v_bar = self.vix_hist[day_idx] if day_idx < len(self.vix_hist) else {"close": 15.0}
             if not self.live_data.tick_store: self.live_data.tick_store = TickStore()
@@ -453,12 +476,12 @@ class MultiTimeframeSimulator:
                     # ── Simulate ORB lock for S3 (lock at 09:30) ──────────
                     if hour == 9 and minute == 30:
                         for tok in self.universe:
-                            # Compute ORB from today's 9:15-9:29 bars
+                            # Compute ORB from today's 9:15-9:30 bars
                             orb_bars = []
-                            for mm in range(15, 30, 5):
-                                t_str = f"09:{mm:02d}"
-                                if t_str in todays_minutes.get(tok, {}):
-                                    orb_bars.append(todays_minutes[tok][t_str])
+                            if tok in todays_minutes:
+                                for t_str, b in todays_minutes[tok].items():
+                                    if "09:15" <= t_str <= "09:30":
+                                        orb_bars.append(b)
                             if orb_bars and self.live_data.tick_store:
                                 orb_high = max(b["high"] for b in orb_bars)
                                 orb_low  = min(b["low"]  for b in orb_bars)
@@ -469,7 +492,7 @@ class MultiTimeframeSimulator:
                                     self.live_data.tick_store._orb[tok]["orb_locked"] = True
 
                     # ── Scan all strategies ──────────────────────────────
-                    if time_str <= "15:00" and daily_trade_count < 5:
+                    if time_str <= "15:00" and daily_trade_count < 5 and not self.scanner.circuit_breaker_tripped():
                         signals = []
 
                         try:
@@ -485,7 +508,7 @@ class MultiTimeframeSimulator:
                             if "S2" not in err_seen: print(f"  [!] S2 err: {e}"); err_seen.add("S2")
 
                         try:
-                            s3 = self.scanner.scan_s3_orb()
+                            s3 = self.scanner.scan_s3_orb(regime)
                             if s3: signals.extend(s3[:1]); sig_counts["S3"] += len(s3)
                         except Exception as e:
                             if "S3" not in err_seen: print(f"  [!] S3 err: {e}"); err_seen.add("S3")
@@ -527,18 +550,37 @@ class MultiTimeframeSimulator:
                         for sig in signals:
                             if daily_trade_count >= 5:
                                 break
+                            # FIX-08: Stop all new entries if daily loss circuit breaker hit
+                            if self.scanner.circuit_breaker_tripped():
+                                break
+                            if self.scanner.is_symbol_on_cooldown(sig["symbol"]):
+                                continue  # Stop-loss cooldown
                             if any(p.symbol == sig["symbol"] for p in self.open_positions.values()):
                                 continue
-                            if len(self.open_positions) >= 3:
+                            if len(self.open_positions) >= 2:   # Max concurrent is 2
                                 continue
-                                
-                            # Risk math
-                            if sig.get("is_short", False):
-                                risk_per_share = max(1, sig["stop_price"] - sig["entry_price"])
+
+                            # FIX-05: RR validation (mirrors live RiskAgent)
+                            is_short = sig.get("is_short", False)
+                            if is_short:
+                                reward = sig["entry_price"] - sig["target_price"]
+                                risk_  = sig["stop_price"] - sig["entry_price"]
                             else:
-                                risk_per_share = max(1, sig["entry_price"] - sig["stop_price"])
+                                reward = sig["target_price"] - sig["entry_price"]
+                                risk_  = sig["entry_price"] - sig["stop_price"]
+                            if risk_ <= 0 or (reward / risk_) < 1.5:
+                                continue   # Block sub-1.5 RR trades -- same as live engine
                                 
-                            qty_risk = int(self.current_capital * 0.0075 / risk_per_share)
+                            # Check S6 guard specifically
+                            if "S6" in sig["strategy"] and not self.scanner.can_s6v_trade(mock_dt):
+                                continue
+                            # Use EXACT same sizing as live engine
+                            from agents.risk_agent import RiskAgent
+                            risk_agent = RiskAgent(self.current_capital, self.live_data)
+                            qty_risk = risk_agent.calculate_position_size(
+                                sig["entry_price"], sig["stop_price"],
+                                regime=regime, strategy=sig["strategy"]
+                            )
                             if qty_risk <= 0: continue
                             
                             oid = f"SIM_{date_str}_{time_str}_{sig['symbol']}"
@@ -556,6 +598,12 @@ class MultiTimeframeSimulator:
                             # S6 cooldown tracking
                             if "S6" in sig["strategy"]:
                                 self.scanner._s6_cooldown[sig["symbol"]] = today_date if isinstance(today_date, datetime.date) else datetime.datetime.strptime(str(today_date), "%Y-%m-%d").date()
+                            
+                            if sig["strategy"] == "S3_ORB":
+                                self.scanner.register_s3_trade()
+                            elif "S6" in sig["strategy"]:
+                                self.scanner.register_s6v_trade()
+                            self.scanner.register_trade()
 
             # EOD Capital Tracking
             self.capital_curve.append(self.current_capital)
@@ -656,6 +704,21 @@ class MultiTimeframeSimulator:
         pnl -= total_costs
 
         self.current_capital += pnl
+        
+        # Track daily PnL and cooldowns in scanner
+        self.scanner.record_pnl(pnl)
+        if reason == "STOP_LOSS":
+            self.scanner.add_symbol_cooldown(pos.symbol)
+            if "S6" in pos.strategy:
+                # pass datetime string to S6 parser (need to convert back to datetime object here realistically, or just pass date)
+                try:
+                    exit_dt = datetime.datetime.strptime(exit_t, "%Y-%m-%d %H:%M:%S")
+                    import zoneinfo
+                    exit_dt = exit_dt.replace(tzinfo=zoneinfo.ZoneInfo("Asia/Kolkata"))
+                except ValueError: # handle simpler date/time strings if they happen
+                    exit_dt = datetime.datetime.strptime(exit_t[:16], "%Y-%m-%d %H:%M")
+                self.scanner.on_s6v_loss(exit_dt)
+
         t = {
             "symbol": pos.symbol, "strategy": pos.strategy,
             "entry": pos.entry_price, "exit": exit_p,
@@ -741,5 +804,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--top", type=int, default=50)
+    parser.add_argument("--offset", type=int, default=0)
     args = parser.parse_args()
-    MultiTimeframeSimulator(args.days, args.top).run()
+    s = MultiTimeframeSimulator(args.days, args.top)
+    s.offset = args.offset
+    s.run()

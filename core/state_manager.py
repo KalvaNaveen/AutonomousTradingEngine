@@ -46,7 +46,8 @@ class StateManager:
                     rvol            REAL DEFAULT 0,
                     deviation_pct   REAL DEFAULT 0,
                     status          TEXT DEFAULT 'OPEN',
-                    last_updated    TEXT
+                    last_updated    TEXT,
+                    token           INTEGER DEFAULT 0
                 )
             """)
             conn.execute("""
@@ -62,6 +63,7 @@ class StateManager:
                 ("rs_score",            "INTEGER DEFAULT 0"),
                 ("market_status",       "TEXT DEFAULT ''"),
                 ("weeks_no_progress",   "INTEGER DEFAULT 0"),
+                ("token",               "INTEGER DEFAULT 0"),
             ]:
                 try:
                     conn.execute(
@@ -87,7 +89,7 @@ class StateManager:
         with sqlite3.connect(STATE_DB) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO active_positions VALUES
-                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 entry_oid,
                 trade.get("symbol", ""),
@@ -117,6 +119,7 @@ class StateManager:
                 trade.get("rs_score", 0),
                 trade.get("market_status", ""),
                 trade.get("weeks_no_progress", 0),
+                trade.get("token", 0),
             ))
             conn.commit()
 
@@ -215,6 +218,7 @@ class StateManager:
                 trade["rs_score"]          = r["rs_score"] or 0
                 trade["market_status"]     = r["market_status"] or ""
                 trade["weeks_no_progress"] = r["weeks_no_progress"] or 0
+                trade["token"]             = r["token"] or 0
             except (IndexError, KeyError):
                 pass
             trades.append(trade)

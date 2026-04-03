@@ -24,6 +24,25 @@ class RiskAgent:
     def approve_trade(self, signal: dict) -> tuple:
         if self.engine_stopped:
             return False, f"ENGINE_STOPPED: {self.stop_reason}"
+
+        # ── Strict regime-strategy matching (prevents chop whipsaws) ──
+        strategy = signal.get("strategy", "")
+        regime = signal.get("regime", "UNKNOWN")
+        
+        allowed_regimes = {
+            "S1_MA_CROSS":      ["BULL", "NORMAL", "VOLATILE"],
+            "S9_MTF_MOMENTUM":  ["BULL", "NORMAL"],
+            "S3_ORB":           ["BULL", "NORMAL", "VOLATILE"],
+            "S8_VOL_PIVOT":     ["BULL", "NORMAL", "VOLATILE"],
+            "S6_TREND_SHORT":   ["BEAR_PANIC", "VOLATILE", "NORMAL"],
+            # Mean-reversion allowed almost everywhere
+            "S2_BB_MEAN_REV":   ["CHOP", "NORMAL", "VOLATILE"],
+            "S6_VWAP_BAND":     ["CHOP", "NORMAL", "VOLATILE"],
+            "S7_MEAN_REV_LONG": ["CHOP", "NORMAL", "VOLATILE"],
+        }
+        
+        if strategy in allowed_regimes and regime not in allowed_regimes[strategy]:
+            return False, f"REGIME_MISMATCH_{regime}_FOR_{strategy}"
             
         import os
         import time
@@ -84,6 +103,16 @@ class RiskAgent:
             return False, self.stop_reason
         if len(self.open_positions) >= MAX_OPEN_POSITIONS:
             return False, f"MAX_{MAX_OPEN_POSITIONS}_POSITIONS"
+
+        # Capital availability check: ensure enough margin for new trade
+        deployed = sum(
+            p["entry_price"] * p["qty"]
+            for p in self.open_positions.values()
+        )
+        estimated_trade_cost = signal["entry_price"] * 1  # minimum 1 share
+        if deployed + estimated_trade_cost > self.active_capital:
+            return False, "INSUFFICIENT_CAPITAL"
+
         if signal["symbol"] in [p["symbol"] for p in self.open_positions.values()]:
             return False, f"DUPLICATE_{signal['symbol']}"
         if signal.get("stop_price", 0) <= 0:
@@ -105,9 +134,14 @@ class RiskAgent:
             reward = signal["target_price"] - signal["entry_price"]
             risk   = signal["entry_price"] - signal["stop_price"]
             
+        # ── RR CALCULATION ──
         rr = reward / risk if risk > 0 else 0
-        if rr < 1.5:
-            return False, f"RR_{rr:.2f}_BELOW_1.5_STRICT"
+        
+        # Special strict rule for weakest strategy (S3)
+        if strategy == "S3_ORB" and rr < 2.5:
+            return False, f"S3_RR_{rr:.2f}_BELOW_2.5"
+        if rr < 2.0:
+            return False, f"RR_{rr:.2f}_BELOW_2.0"
         return True, "APPROVED"
 
     def _get_corr_matrix(self):
@@ -156,35 +190,24 @@ class RiskAgent:
                                 regime: str = "NORMAL",
                                 strategy: str = "") -> int:
         """
-        [V18] Volatility-adjusted position sizing for MIS intraday.
-        Risk per trade: 0.75% of capital = Rs.3,750 on Rs.5L.
-        Scales down in volatile regimes.
-
-        Regime scaling:
-          BULL       -> 100%
-          NORMAL     -> 100%
-          CHOP       -> 80%
-          BEAR_PANIC -> 40%
-          EXTREME    -> 30%
+        V19.2 — Per-strategy + regime scaling for capital protection.
+        Mean-reversion (S2/S6V/S7) get reduced size in chop.
         """
-        regime_scale = {
-            "BULL":          1.0,
-            "NORMAL":        1.0,
-            "VOLATILE":      0.70,
-            "BEAR_PANIC":    0.40,
-            "EXTREME_PANIC": 0.30,
-            "CHOP":          0.80,
+        base_scale = {
+            "BULL": 1.0, "NORMAL": 1.0, "VOLATILE": 0.75,
+            "BEAR_PANIC": 0.45, "EXTREME_PANIC": 0.25, "CHOP": 0.80
         }.get(regime, 1.0)
 
-        # Dynamic Volatility + Regime scaling
-        vix = self.data.get_india_vix() if self.data else 15.0
-        if vix > 22.0:
-            regime_scale *= 0.6
+        # Mean-reversion strategies are riskier in chop → extra cut
+        if strategy in ["S2_BB_MEAN_REV", "S6_VWAP_BAND", "S7_MEAN_REV_LONG"]:
+            if regime == "CHOP":
+                base_scale *= 0.60
+            else:
+                base_scale *= 0.85
 
-        # Use ACTIVE capital + explicit STT buffer
         risk_rs = (self.total_capital 
                    * MAX_RISK_PER_TRADE_PCT 
-                   * regime_scale 
+                   * base_scale 
                    * STT_BUFFER)
 
         rps = abs(entry - stop)
@@ -193,11 +216,18 @@ class RiskAgent:
 
         shares = int(risk_rs / rps)
 
-        # Position cap
-        cap = int((self.active_capital * MAX_POSITION_PCT) / (entry * 1.001))
+        # Hard position cap with MIS Leverage (approx 5x for largecaps)
+        # Instead of allocating 15% of capital (e.g. 15k) and buying 15k worth,
+        # we allocate 15k margin, giving us 75k of absolute exposure power.
+        MIS_LEVERAGE_MULT = 5.0 
+        cap = int((self.active_capital * MAX_POSITION_PCT * MIS_LEVERAGE_MULT) / (entry * 1.001))
+        
         return min(shares, cap)
 
     def register_open(self, oid: str, pos: dict):
+        # Preserve is_short flag for correct P&L calc on close
+        if "is_short" not in pos:
+            pos["is_short"] = False
         self.open_positions[oid] = pos
 
     def close_position(self, oid: str, exit_price: float) -> float:
@@ -208,7 +238,11 @@ class RiskAgent:
         # Final leg only on remaining shares.
         # pos["qty"] was already updated to remaining_qty after partial fill
         # (set in monitor_positions when partial_filled detected).
-        final_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
+        # Direction-aware P&L: shorts profit when price falls
+        if pos.get("is_short", False):
+            final_leg_pnl = (pos["entry_price"] - exit_price) * pos["qty"]
+        else:
+            final_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
         self.daily_pnl += final_leg_pnl
         self.weekly_pnl += final_leg_pnl
 

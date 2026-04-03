@@ -44,6 +44,7 @@ class ExecutionAgent:
                 "entry_price": trade["entry_price"],
                 "qty":         trade["qty"],
                 "strategy":    trade["strategy"],
+                "is_short":    trade.get("is_short", False),
             })
         self.alert(
             f"*CRASH RECOVERY*\n"
@@ -194,6 +195,7 @@ class ExecutionAgent:
             "entry_price": signal["entry_price"],
             "qty":         qty,
             "strategy":    signal["strategy"],
+            "is_short":    is_short,
         })
 
         # Background thread: polls until entry fills, then places SL + target
@@ -242,12 +244,13 @@ class ExecutionAgent:
         else:
             self.active_trades[entry_oid] = updated_trade
 
-    def monitor_positions(self, daily_cache=None, tick_store=None):
+    def monitor_positions(self, daily_cache=None, tick_store=None, current_regime=None):
         """
         Monitor all open MIS positions.
         Handles:
           - MIS EOD square-off at 15:14
-          - RSI-based dynamic exits (S6 cools below 40, S7 recovers above 60)
+          - RSI-based dynamic exits (S6/S7)
+          - Structural Regime Shift Evacuations
           - Stop/Target hit checks
         """
         now = now_ist()
@@ -275,10 +278,30 @@ class ExecutionAgent:
             if now.time() >= datetime.time(sq_h, sq_m):
                 self._force_exit(oid, trade, "MIS_EOD_SQUAREOFF")
                 continue
+                
+            # ── Dynamic Regime Shift Evacuation ──
+            is_pos_short = trade.get("is_short", False)
+            if current_regime:
+                if is_pos_short and current_regime == "BULL":
+                    self.alert(f"⚠️ *MACRO EVACUATION* `{trade['symbol']}`\nRegime flipped to BULL. Killing SHORT.")
+                    self._force_exit(oid, trade, "MACRO_FLIP_BULL")
+                    continue
+                elif not is_pos_short and current_regime == "BEAR_PANIC":
+                    self.alert(f"⚠️ *MACRO EVACUATION* `{trade['symbol']}`\nRegime flipped to BEAR_PANIC. Killing LONG.")
+                    self._force_exit(oid, trade, "MACRO_FLIP_BEAR")
+                    continue
 
             # ── Dynamic RSI Exits ──
             if daily_cache and tick_store:
                 token = trade.get("token")
+                if not token and trade.get("symbol"):
+                    from agents.data_agent import DataAgent
+                    for t, s in DataAgent.UNIVERSE.items():
+                        if s == trade["symbol"]:
+                            token = t
+                            trade["token"] = t
+                            break
+
                 if token:
                     close_px = tick_store.get_ltp_if_fresh(token)
                     if close_px > 0:
@@ -374,7 +397,7 @@ class ExecutionAgent:
         if flattened > 0:
             self.alert(f"*[flatten_all]* Force exited `{flattened}` positions for reason: `{reason}`")
 
-    def daily_summary_alert(self, regime: str, total_scans: int = 0):
+    def daily_summary_alert(self, regime: str, total_scans: int = 0, real_capital: float = None):
         from agents.report_agent import build_daily_report
         stats = self.risk.get_daily_stats()
         self.journal.log_daily_summary(
@@ -388,6 +411,7 @@ class ExecutionAgent:
             trades_today=trades_today,
             capital=self.risk.total_capital,
             total_scans=total_scans,
+            real_capital=real_capital
         )
         self.alert(msg)
 
