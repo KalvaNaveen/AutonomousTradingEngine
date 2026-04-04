@@ -24,24 +24,48 @@ class FillMonitor:
         self.kite  = kite
         self.state = state
         self._alert = alert_fn or (lambda msg: print(f"[FillMonitor] {msg}"))
+        self._ws_cache = {}  # Zero-latency WebSocket memory cache
+
+    def on_order_update(self, ws, data):
+        """
+        WebSocket callback hooked from main.py.
+        Instantly caches order updates pushed by Zerodha directly.
+        """
+        if data and "order_id" in data:
+            self._ws_cache[str(data["order_id"])] = {
+                "status":           data.get("status", "UNKNOWN"),
+                "filled_qty":       data.get("filled_quantity", 0),
+                "pending_qty":      data.get("pending_quantity", 0),
+                "average_price":    data.get("average_price", 0),
+            }
 
     def get_order_status(self, order_id: str) -> dict:
         """
-        Returns order dict with keys: status, filled_quantity, pending_quantity
-        Kite status values: OPEN, COMPLETE, CANCELLED, REJECTED
+        First checks zero-latency WebSocket cache.
+        If missing, falls back to REST API to guarantee data.
+        Returns order dict with keys: status, filled_qty, pending_qty, average_price
         """
+        # 1. Zero-latency WebSocket check
+        oid_str = str(order_id)
+        if oid_str in self._ws_cache:
+            return self._ws_cache[oid_str]
+
+        # 2. REST Fallback
         try:
             orders = self.kite.orders()
             for o in orders:
-                if str(o.get("order_id")) == str(order_id):
-                    return {
+                if str(o.get("order_id")) == oid_str:
+                    # Update cache to prevent future REST calls
+                    self._ws_cache[oid_str] = {
                         "status":           o.get("status", "UNKNOWN"),
                         "filled_qty":       o.get("filled_quantity", 0),
                         "pending_qty":      o.get("pending_quantity", 0),
                         "average_price":    o.get("average_price", 0),
                     }
+                    return self._ws_cache[oid_str]
         except Exception as e:
-            print(f"[FillMonitor] Order status error: {e}")
+            print(f"[FillMonitor] REST status error: {e}")
+            
         return {"status": "UNKNOWN", "filled_qty": 0,
                 "pending_qty": 0, "average_price": 0}
 

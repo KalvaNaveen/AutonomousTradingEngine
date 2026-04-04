@@ -40,7 +40,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from kiteconnect import KiteConnect
-from config import KITE_API_KEY, NIFTY50_TOKEN, INDIA_VIX_TOKEN, TOTAL_CAPITAL, today_ist
+from config import KITE_API_KEY, NIFTY50_TOKEN, INDIA_VIX_TOKEN, TOTAL_CAPITAL, today_ist, MAX_OPEN_POSITIONS, MAX_TRADES_PER_DAY, EOD_SQUAREOFF_TIME
 
 # Import LIVE components
 from agents.data_agent import DataAgent
@@ -130,10 +130,17 @@ class MultiTimeframeSimulator:
         db = HistoricalDB()
 
         all_tokens = list(self.universe.keys()) + [NIFTY50_TOKEN, INDIA_VIX_TOKEN]
-        end = today_ist() - datetime.timedelta(days=getattr(self, 'offset', 0))
-        required_start_min = end - datetime.timedelta(days=self.days_back + 14)
-
-        print(f"\n[Simulator] Loading {len(self.universe)} symbols x {self.days_back} days (offset {getattr(self, 'offset', 0)}) from SQLite DB...")
+        # To correctly align minute data with trading days, we must use the actual dates 
+        # from our daily ref bars, otherwise weekend disparities cause missing minute data.
+        nifty_bars = db.get_daily_bars(NIFTY50_TOKEN)
+        offset = getattr(self, 'offset', 0)
+        sim_end_idx = len(nifty_bars) - offset
+        sim_start_idx = max(0, sim_end_idx - self.days_back - 14) # Buffer of 14 days
+        
+        # Resolve to actual strings (YYYY-MM-DD format from db)
+        start_date_str = nifty_bars[sim_start_idx]['date'] if nifty_bars else None
+        
+        print(f"\n[Simulator] Loading {len(self.universe)} symbols x {self.days_back} days (offset {offset}) from SQLite DB...")
 
         # 1. Discover S4 futures tokens from Kite (FUTURES ONLY — no options)
         # COMMENTED OUT PER USER REQUEST
@@ -163,10 +170,9 @@ class MultiTimeframeSimulator:
         self.nifty_hist = self.hist_daily.get(NIFTY50_TOKEN, [])
         self.vix_hist   = self.hist_daily.get(INDIA_VIX_TOKEN, [])
 
-        # 3. Load Minute Data (stocks)
         min_count = 0
-        min_start_str = str(required_start_min)
-        for token in self.universe:
+        min_start_str = start_date_str if start_date_str else "2000-01-01"
+        for token in all_daily_tokens:
             bars = db.get_minute_bars(token, start_datetime_str=min_start_str)
             grouped = defaultdict(list)
             for b in bars:
@@ -298,9 +304,15 @@ class MultiTimeframeSimulator:
             
         if not hasattr(self, '_sim_cum_vol'):
             self._sim_cum_vol = {}
+            self._sim_day_open = {}
+            self._sim_day_high = {}
+            self._sim_day_low = {}
             
         if is_new_day:
             self._sim_cum_vol = {}
+            self._sim_day_open = {}
+            self._sim_day_high = {}
+            self._sim_day_low = {}
             if self.live_data.tick_store:
                 self.live_data.tick_store.reset_daily()
         
@@ -314,6 +326,14 @@ class MultiTimeframeSimulator:
             from zoneinfo import ZoneInfo
             mock_dt = mock_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
             
+            if token not in self._sim_day_open:
+                self._sim_day_open[token] = bar["open"]
+                self._sim_day_high[token] = bar["high"]
+                self._sim_day_low[token] = bar["low"]
+            else:
+                self._sim_day_high[token] = max(self._sim_day_high.get(token, 0), bar["high"])
+                self._sim_day_low[token] = min(self._sim_day_low.get(token, 999999), bar["low"])
+                
             tick = {
                 "instrument_token": token,
                 "last_price": bar["close"],
@@ -325,7 +345,7 @@ class MultiTimeframeSimulator:
                 "exchange_timestamp": mock_dt,
                 "last_trade_time": mock_dt,
                 "change": 0.0,
-                "ohlc": {"open": bar["open"], "high": bar["high"], "low": bar["low"], "close": bar["close"]},
+                "ohlc": {"open": self._sim_day_open[token], "high": self._sim_day_high[token], "low": self._sim_day_low[token], "close": bar["close"]},
                 "depth": {"buy": [{"quantity": 100, "price": bar["close"], "orders": 1}],
                           "sell": [{"quantity": 100, "price": bar["close"] * 1.001, "orders": 1}]}
             }
@@ -389,7 +409,7 @@ class MultiTimeframeSimulator:
         sim_start = max(260, sim_end - self.days_back)
         total_executed = 0
         sig_counts = {"S1": 0, "S2": 0, "S3": 0, "S4": 0,
-                      "S6": 0, "S6V": 0, "S7": 0, "S8": 0, "S9": 0}
+                      "S6": 0, "S6_VWAP": 0, "S7": 0, "S8": 0, "S9": 0}
         err_seen = set()
         daily_trade_count = 0
 
@@ -438,117 +458,106 @@ class MultiTimeframeSimulator:
             except ValueError:
                 continue
 
-            # Time loop 09:15 to 15:30 in 5-min steps
-            for hour in range(9, 16):
-                for minute in range(15 if hour == 9 else 0, 60 if hour < 15 else 31, 5):
-                    time_str = f"{hour:02d}:{minute:02d}"
-                    ts_datetime = f"{date_str} {time_str}:00"
-                    
-                    # ── Time Travel ──
-                    mock_dt = base_dt.replace(hour=hour, minute=minute, tzinfo=IST)
-                    mock_now = lambda dt=mock_dt: dt
-                    
-                    config.now_ist = mock_now
-                    scanner_agent.now_ist = mock_now
-                    data_agent.now_ist = mock_now
-                    tick_store.now_ist = mock_now
-                    
-                    # Force TickStore freshness
-                    if not self.live_data.tick_store:
-                        self.live_data.tick_store = tick_store.TickStore()
-                    self.live_data.tick_store._ready = True
-                    self.live_data.tick_store.is_ready = lambda: True
-                    self.live_data.tick_store.is_fresh = lambda: True
-                    self.live_data.tick_store.get_ltp_if_fresh = self.live_data.tick_store.get_ltp
-                    
-                    # Update Mock Tick Store (stocks)
-                    is_new = (hour == 9 and minute == 15)
-                    for token in self.universe:
-                        self._update_mock_tickstore(ts_datetime, time_str, todays_minutes, token, is_new_day=is_new)
-
-                    # Inject futures ticks for S4 (if data available in DB)
-                    for fut_token in self.futures_map.keys():
-                        self._update_mock_tickstore(ts_datetime, time_str, todays_minutes, fut_token, is_new_day=is_new)
+            # Time loop 09:15 to 15:25 in 5-min steps (matches 5-min candle formation)
+            import concurrent.futures
+            import multiprocessing
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(4, multiprocessing.cpu_count())) as executor:
+                for hour in range(9, 16):
+                    for minute in range(15 if hour == 9 else 0, 60 if hour < 15 else 30, 5):
+                        time_str = f"{hour:02d}:{minute:02d}"
+                        ts_datetime = f"{date_str} {time_str}:00"
                         
-                    # Check stops/targets
-                    self._check_stops_targets(date_str, time_str, todays_minutes)
+                        # ── Time Travel ──
+                        mock_dt = base_dt.replace(hour=hour, minute=minute, tzinfo=IST)
+                        mock_now = lambda dt=mock_dt: dt
+                        
+                        config.now_ist = mock_now
+                        scanner_agent.now_ist = mock_now
+                        data_agent.now_ist = mock_now
+                        tick_store.now_ist = mock_now
+                        
+                        # Force TickStore freshness
+                        if not self.live_data.tick_store:
+                            self.live_data.tick_store = tick_store.TickStore()
+                        self.live_data.tick_store._ready = True
+                        self.live_data.tick_store.is_ready = lambda: True
+                        self.live_data.tick_store.is_fresh = lambda: True
+                        self.live_data.tick_store.get_ltp_if_fresh = self.live_data.tick_store.get_ltp
+                        
+                        # Update Mock Tick Store (stocks + Nifty + Vix)
+                        is_new = (hour == 9 and minute == 15)
+                        import config
+                        for token in list(self.universe.keys()) + [config.NIFTY50_TOKEN, config.INDIA_VIX_TOKEN]:
+                            self._update_mock_tickstore(ts_datetime, time_str, todays_minutes, token, is_new_day=is_new)
 
-                    # ── Simulate ORB lock for S3 (lock at 09:30) ──────────
-                    if hour == 9 and minute == 30:
-                        for tok in self.universe:
-                            # Compute ORB from today's 9:15-9:30 bars
-                            orb_bars = []
-                            if tok in todays_minutes:
-                                for t_str, b in todays_minutes[tok].items():
-                                    if "09:15" <= t_str <= "09:30":
-                                        orb_bars.append(b)
-                            if orb_bars and self.live_data.tick_store:
-                                orb_high = max(b["high"] for b in orb_bars)
-                                orb_low  = min(b["low"]  for b in orb_bars)
-                                # Inject into tick_store ORB structure directly
-                                with self.live_data.tick_store._lock:
-                                    self.live_data.tick_store._orb[tok]["orb_high"] = orb_high
-                                    self.live_data.tick_store._orb[tok]["orb_low"]  = orb_low
-                                    self.live_data.tick_store._orb[tok]["orb_locked"] = True
+                        # Inject futures ticks for S4 (if data available in DB)
+                        for fut_token in self.futures_map.keys():
+                            self._update_mock_tickstore(ts_datetime, time_str, todays_minutes, fut_token, is_new_day=is_new)
+                            
+                        # Check stops/targets
+                        self._check_stops_targets(date_str, time_str, todays_minutes)
 
-                    # ── Scan all strategies ──────────────────────────────
-                    if time_str <= "15:00" and daily_trade_count < 5 and not self.scanner.circuit_breaker_tripped():
-                        signals = []
+                        # ── Simulate ORB lock for S3 (lock at 09:30) ──────────
+                        if hour == 9 and minute == 30:
+                            for tok in self.universe:
+                                # Compute ORB from today's 9:15-9:30 bars
+                                orb_bars = []
+                                if tok in todays_minutes:
+                                    for t_str, b in todays_minutes[tok].items():
+                                        if "09:15" <= t_str <= "09:30":
+                                            orb_bars.append(b)
+                                if orb_bars and self.live_data.tick_store:
+                                    orb_high = max(b["high"] for b in orb_bars)
+                                    orb_low  = min(b["low"]  for b in orb_bars)
+                                    # Inject into tick_store ORB structure directly
+                                    with self.live_data.tick_store._lock:
+                                        self.live_data.tick_store._orb[tok]["orb_high"] = orb_high
+                                        self.live_data.tick_store._orb[tok]["orb_low"]  = orb_low
+                                        self.live_data.tick_store._orb[tok]["orb_locked"] = True
 
-                        try:
-                            s1 = self.scanner.scan_s1_ma_cross(regime)
-                            if s1: signals.extend(s1[:1]); sig_counts["S1"] += len(s1)
-                        except Exception as e:
-                            if "S1" not in err_seen: print(f"  [!] S1 err: {e}"); err_seen.add("S1")
+                        # ── Scan all strategies ──────────────────────────────
+                        if time_str <= "15:00" and daily_trade_count < MAX_TRADES_PER_DAY and not self.scanner.circuit_breaker_tripped():
+                            signals = []
 
-                        try:
-                            s2 = self.scanner.scan_s2_bb_mean_rev(regime)
-                            if s2: signals.extend(s2[:1]); sig_counts["S2"] += len(s2)
-                        except Exception as e:
-                            if "S2" not in err_seen: print(f"  [!] S2 err: {e}"); err_seen.add("S2")
+                            _all_scan_tasks = {
+                                                                                                                               "S1": ("S1_MA_CROSS", lambda: self.scanner.scan_s1_ma_cross(regime)),
+                                "S2": ("S2_BB_MEAN_REV", lambda: self.scanner.scan_s2_bb_mean_rev(regime)),
+                                "S3": ("S3_ORB", lambda: self.scanner.scan_s3_orb(regime)),
+                                "S6": ("S6_TREND_SHORT", lambda: self.scanner.scan_s6_trend_short(regime)),
+                                "S6_VWAP": ("S6_VWAP_BAND", lambda: self.scanner.scan_s6_vwap_band(regime)),
+                                "S7": ("S7_MEAN_REV_LONG", lambda: self.scanner.scan_s7_mean_rev_long(regime)),
+                                "S8": ("S8_VOL_PIVOT", lambda: self.scanner.scan_s8_vol_pivot(regime)),
+                                "S9": ("S9_MTF_MOMENTUM", lambda: self.scanner.scan_s9_mtf_momentum(regime)),
+                            }
+                            _disabled = getattr(config, "DISABLED_STRATEGIES", set())
+                            scan_tasks = {
+                                name: func for name, (cfg_key, func) in _all_scan_tasks.items()
+                                if cfg_key not in _disabled
+                            }
+                            
+                            future_to_strat = {executor.submit(task): name for name, task in scan_tasks.items()}
+                            
+                            for future in concurrent.futures.as_completed(future_to_strat):
+                                strat_name = future_to_strat[future]
+                                try:
+                                    result = future.result()
+                                    if result:
+                                        for sig in result[:1]:
+                                            sig["_strategy_group"] = strat_name
+                                        signals.extend(result[:1])
+                                        sig_counts[strat_name] += len(result)
+                                except Exception as e:
+                                    if strat_name not in err_seen:
+                                        print(f"  [!] {strat_name} err: {e}")
+                                        err_seen.add(strat_name)
 
-                        try:
-                            s3 = self.scanner.scan_s3_orb(regime)
-                            if s3: signals.extend(s3[:1]); sig_counts["S3"] += len(s3)
-                        except Exception as e:
-                            if "S3" not in err_seen: print(f"  [!] S3 err: {e}"); err_seen.add("S3")
-
-                        # S4 is skipped in simulator (no NFO futures in local SQLite)
-                        # scan_s4_arbitrage() auto-returns [] when _futures_tokens is empty
-
-                        try:
-                            s6 = self.scanner.scan_s6_trend_short(regime)
-                            if s6: signals.extend(s6[:1]); sig_counts["S6"] += len(s6)
-                        except Exception as e:
-                            if "S6" not in err_seen: print(f"  [!] S6 err: {e}"); err_seen.add("S6")
-
-                        try:
-                            s6v = self.scanner.scan_s6_vwap_band(regime)
-                            if s6v: signals.extend(s6v[:1]); sig_counts["S6V"] += len(s6v)
-                        except Exception as e:
-                            if "S6V" not in err_seen: print(f"  [!] S6V err: {e}"); err_seen.add("S6V")
-
-                        try:
-                            s7 = self.scanner.scan_s7_mean_rev_long(regime)
-                            if s7: signals.extend(s7[:1]); sig_counts["S7"] += len(s7)
-                        except Exception as e:
-                            if "S7" not in err_seen: print(f"  [!] S7 err: {e}"); err_seen.add("S7")
-
-                        try:
-                            s8 = self.scanner.scan_s8_vol_pivot(regime)
-                            if s8: signals.extend(s8[:1]); sig_counts["S8"] += len(s8)
-                        except Exception as e:
-                            if "S8" not in err_seen: print(f"  [!] S8 err: {e}"); err_seen.add("S8")
-
-                        try:
-                            s9 = self.scanner.scan_s9_mtf_momentum(regime)
-                            if s9: signals.extend(s9[:1]); sig_counts["S9"] += len(s9)
-                        except Exception as e:
-                            if "S9" not in err_seen: print(f"  [!] S9 err: {e}"); err_seen.add("S9")
+                            # Sort by RVOL descending (same as live engine)
+                            signals.sort(key=lambda s: s.get('rvol', 0), reverse=True)
 
                         # Execute!
                         for sig in signals:
-                            if daily_trade_count >= 5:
+                            if daily_trade_count >= MAX_TRADES_PER_DAY:
                                 break
                             # FIX-08: Stop all new entries if daily loss circuit breaker hit
                             if self.scanner.circuit_breaker_tripped():
@@ -557,7 +566,24 @@ class MultiTimeframeSimulator:
                                 continue  # Stop-loss cooldown
                             if any(p.symbol == sig["symbol"] for p in self.open_positions.values()):
                                 continue
-                            if len(self.open_positions) >= 2:   # Max concurrent is 2
+                            if len(self.open_positions) >= MAX_OPEN_POSITIONS:
+                                continue
+
+                            # ── Regime-dependent cluster limits (MUST match main.py) ──
+                            strat_group = sig.pop("_strategy_group", "")
+                            if regime == "BULL":
+                                max_allowed = 8 if strat_group in ["S1", "S3", "S7"] else 2
+                            elif regime == "BEAR_PANIC":
+                                max_allowed = 10 if strat_group in ["S6", "S6_VWAP"] else 0
+                            elif regime in ["CHOP", "EXTREME_PANIC"]:
+                                max_allowed = 2
+                            else:  # NORMAL / VOLATILE
+                                max_allowed = 5
+                            same_strat_count = sum(
+                                1 for p in self.open_positions.values()
+                                if p.strategy.startswith(strat_group) or p.strategy.startswith(sig.get("strategy", ""))
+                            )
+                            if same_strat_count >= max_allowed:
                                 continue
 
                             # FIX-05: RR validation (mirrors live RiskAgent)
@@ -579,7 +605,8 @@ class MultiTimeframeSimulator:
                             risk_agent = RiskAgent(self.current_capital, self.live_data)
                             qty_risk = risk_agent.calculate_position_size(
                                 sig["entry_price"], sig["stop_price"],
-                                regime=regime, strategy=sig["strategy"]
+                                regime=regime, strategy=sig["strategy"],
+                                symbol=sig["symbol"]
                             )
                             if qty_risk <= 0: continue
                             
@@ -599,9 +626,7 @@ class MultiTimeframeSimulator:
                             if "S6" in sig["strategy"]:
                                 self.scanner._s6_cooldown[sig["symbol"]] = today_date if isinstance(today_date, datetime.date) else datetime.datetime.strptime(str(today_date), "%Y-%m-%d").date()
                             
-                            if sig["strategy"] == "S3_ORB":
-                                self.scanner.register_s3_trade()
-                            elif "S6" in sig["strategy"]:
+                            if "S6" in sig["strategy"]:
                                 self.scanner.register_s6v_trade()
                             self.scanner.register_trade()
 
@@ -633,8 +658,9 @@ class MultiTimeframeSimulator:
             high = bar["high"]
             close = bar["close"]
 
-            # MIS EOD square-off at 15:15
-            if time_str >= "15:15":
+            # MIS EOD square-off (use config, same as live engine)
+            sq_h, sq_m = map(int, EOD_SQUAREOFF_TIME.split(":"))
+            if time_str >= f"{sq_h:02d}:{sq_m:02d}":
                 pnl = (pos.entry_price - close) * pos.qty if pos.is_short else (close - pos.entry_price) * pos.qty
                 self._record_trade(pos, close, pnl, f"{date_str} {time_str}", "MIS_EOD")
                 closed.append(oid)

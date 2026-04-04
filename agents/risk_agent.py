@@ -20,6 +20,8 @@ class RiskAgent:
         self._corr_series_cache = {}
         self._corr_cache        = {}
         self._corr_cache_date   = None
+        self._mis_margin_cache  = {}     # symbol -> MIS leverage multiplier
+        self._mis_cache_date    = None
 
     def approve_trade(self, signal: dict) -> tuple:
         if self.engine_stopped:
@@ -39,6 +41,9 @@ class RiskAgent:
             "S2_BB_MEAN_REV":   ["CHOP", "NORMAL", "VOLATILE"],
             "S6_VWAP_BAND":     ["CHOP", "NORMAL", "VOLATILE"],
             "S7_MEAN_REV_LONG": ["CHOP", "NORMAL", "VOLATILE"],
+            # Macro news trades bypass regime — news is independent of technicals
+            "S8_MACRO_LONG":    ["BULL", "NORMAL", "VOLATILE", "CHOP", "BEAR_PANIC", "EXTREME_PANIC", "NEWS_OVERRIDE"],
+            "S8_MACRO_SHORT":   ["BULL", "NORMAL", "VOLATILE", "CHOP", "BEAR_PANIC", "EXTREME_PANIC", "NEWS_OVERRIDE"],
         }
         
         if strategy in allowed_regimes and regime not in allowed_regimes[strategy]:
@@ -188,7 +193,8 @@ class RiskAgent:
 
     def calculate_position_size(self, entry: float, stop: float,
                                 regime: str = "NORMAL",
-                                strategy: str = "") -> int:
+                                strategy: str = "",
+                                symbol: str = "") -> int:
         """
         V19.2 — Per-strategy + regime scaling for capital protection.
         Mean-reversion (S2/S6V/S7) get reduced size in chop.
@@ -216,13 +222,51 @@ class RiskAgent:
 
         shares = int(risk_rs / rps)
 
-        # Hard position cap with MIS Leverage (approx 5x for largecaps)
-        # Instead of allocating 15% of capital (e.g. 15k) and buying 15k worth,
-        # we allocate 15k margin, giving us 75k of absolute exposure power.
-        MIS_LEVERAGE_MULT = 5.0 
-        cap = int((self.active_capital * MAX_POSITION_PCT * MIS_LEVERAGE_MULT) / (entry * 1.001))
+        # Hard position cap with REAL MIS Leverage from Zerodha
+        leverage = self._get_mis_leverage(symbol)
+        cap = int((self.active_capital * MAX_POSITION_PCT * leverage) / (entry * 1.001))
         
         return min(shares, cap)
+
+    def _get_mis_leverage(self, symbol: str) -> float:
+        """
+        Returns the real MIS leverage multiplier for a symbol.
+        Fetches from Zerodha's equity margins endpoint once per day and caches.
+        Falls back to 5.0x if API fails or symbol not found.
+        """
+        import datetime as dt
+        today = dt.date.today().isoformat()
+        
+        # Refresh cache once per day
+        if self._mis_cache_date != today:
+            self._mis_margin_cache = {}
+            self._mis_cache_date = today
+            try:
+                if self.data and hasattr(self.data, "kite") and self.data.kite:
+                    import requests
+                    resp = requests.get(
+                        "https://api.kite.trade/margins/equity",
+                        headers={
+                            "X-Kite-Version": "3",
+                            "Authorization": f"token {self.data.kite.api_key}:{self.data.kite.access_token}"
+                        },
+                        timeout=10
+                    )
+                    if resp.status_code == 200:
+                        parsed = resp.json()
+                        data = parsed.get("data", []) if isinstance(parsed, dict) else parsed
+                        for item in data:
+                            sym = item.get("tradingsymbol", "")
+                            mis_mult = item.get("mis_multiplier", 0)
+                            if sym and mis_mult > 0:
+                                self._mis_margin_cache[sym] = mis_mult
+                        print(f"[Risk] Loaded MIS margins for {len(self._mis_margin_cache)} symbols")
+                    else:
+                        print(f"[Risk] MIS margins API returned {resp.status_code}, using 5x fallback")
+            except Exception as e:
+                print(f"[Risk] MIS margins fetch failed: {e}, using 5x fallback")
+
+        return self._mis_margin_cache.get(symbol, 5.0)
 
     def register_open(self, oid: str, pos: dict):
         # Preserve is_short flag for correct P&L calc on close

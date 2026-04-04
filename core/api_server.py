@@ -34,8 +34,24 @@ _boot_time = None   # set when server starts
 # Agent activity log — ring buffer of recent actions
 _agent_log = deque(maxlen=200)
 
+# News feed — ring buffer from MacroAgent RSS headlines
+_news_feed = deque(maxlen=100)
+
 # Connected WS clients
 active_connections: list[WebSocket] = []
+
+
+def log_news_headline(title: str, source: str, symbol: str = "", sentiment: str = "neutral"):
+    """Called by MacroAgent to push a real headline to the dashboard feed."""
+    from config import now_ist
+    _news_feed.appendleft({
+        "time": now_ist().strftime("%H:%M"),
+        "title": title[:120],
+        "source": source,
+        "symbol": symbol,
+        "sentiment": sentiment,  # 'bullish', 'bearish', 'neutral'
+    })
+
 
 
 def log_agent_action(agent: str, action: str, detail: str = ""):
@@ -70,8 +86,11 @@ async def websocket_endpoint(websocket: WebSocket):
     active_connections.append(websocket)
     try:
         while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
+            # Keep the connection alive; we only push, never receive meaningful data
+            await asyncio.wait_for(websocket.receive_text(), timeout=30)
+    except Exception:
+        pass  # Covers WebSocketDisconnect, TimeoutError, and network resets
+    finally:
         if websocket in active_connections:
             active_connections.remove(websocket)
 
@@ -132,58 +151,65 @@ def _build_payload() -> dict:
     # ── WebSocket health ──────────────────────────────────────────
     ws_ok = False
     tick_age = -1
-    if eng and hasattr(eng, "tick_store") and eng.tick_store:
+    has_tick_store = eng and hasattr(eng, "tick_store") and eng.tick_store is not None
+    if has_tick_store:
         ws_ok = eng.tick_store.is_fresh()
         last_tick = getattr(eng.tick_store, "_last_tick_at", None)
         if last_tick:
             tick_age = round((now - last_tick).total_seconds(), 1)
 
-    # ── Active positions ──────────────────────────────────────────
+    # ── Index data for ticker strip ───────────────────────────────
+    from config import NIFTY50_TOKEN, INDIA_VIX_TOKEN
+    index_data = {"nifty50": None, "banknifty": None, "vix": None}
+    if has_tick_store:
+        try:
+            n50 = eng.tick_store.get_ltp(NIFTY50_TOKEN)
+            if n50 and n50 > 0:
+                index_data["nifty50"] = round(n50, 2)
+            vix = eng.tick_store.get_ltp(INDIA_VIX_TOKEN)
+            if vix and vix > 0:
+                index_data["vix"] = round(vix, 2)
+        except Exception:
+            pass
+
+    # ── Active positions & Sector Breakdown (REAL) ────────────────
     positions = []
+    sector_pnl = {}
+    
     if eng and hasattr(eng, "execution") and eng.execution:
         for oid, trade in eng.execution.active_trades.items():
-            # trade is a dict, NOT an object
             token = trade.get("token")
             symbol = trade.get("symbol", "")
 
-            # Restored trades from crash recovery may lack token in SQLite
+            # Fix missing tokens from SQLite recovery
             if not token and symbol and eng.data:
                 for t, s in eng.data.UNIVERSE.items():
                     if s == symbol:
-                        token = t
-                        trade["token"] = t  # Memoize for future ticks
-                        break
+                        token = t; trade["token"] = t; break
 
-            entry_price = trade.get("entry_price", 0)
+            ep = trade.get("entry_price", 0.0)
             qty = trade.get("qty", 0)
             is_short = trade.get("is_short", False)
-            target = trade.get("target_price", 0)
-            stop = trade.get("stop_price", 0)
-            strategy = trade.get("strategy", "")
-            entry_time = trade.get("entry_time", "")
-
-            ltp = 0.0
-            if eng.tick_store and token:
-                ltp = eng.tick_store.get_ltp(token)
-
-            if is_short:
-                unrealized = (entry_price - ltp) * qty if ltp > 0 else 0
-            else:
-                unrealized = (ltp - entry_price) * qty if ltp > 0 else 0
-
+            ltp = eng.tick_store.get_ltp(token) if eng.tick_store and token else 0.0
+            
+            pnl = (ltp - ep) * qty if not is_short else (ep - ltp) * qty
+            
+            # Record for Live Floor
             positions.append({
-                "oid": str(oid),
-                "symbol": symbol,
-                "strategy": strategy,
-                "entry": round(entry_price, 2),
-                "ltp": round(ltp, 2),
-                "qty": qty,
-                "is_short": is_short,
-                "unrealized_pnl": round(unrealized, 2),
-                "target": round(target, 2),
-                "stop": round(stop, 2),
-                "entry_time": str(entry_time),
+                "oid": str(oid), "symbol": symbol, "strategy": trade.get("strategy", ""),
+                "entry": round(ep, 2), "ltp": round(ltp, 2), "qty": qty,
+                "is_short": is_short, "unrealized_pnl": round(pnl, 2),
+                "target": round(trade.get("target_price", 0), 2),
+                "stop": round(trade.get("stop_price", 0), 2),
+                "entry_time": str(trade.get("entry_time", "")),
             })
+
+            # Record for Cyber Pulse
+            if hasattr(eng, "data"):
+                sect = eng.data.SYMBOL_TO_SECTOR.get(symbol, "OTHER")
+                sector_pnl[sect] = sector_pnl.get(sect, 0.0) + pnl
+
+
 
     # ── Agent statuses ────────────────────────────────────────────
     agents = []
@@ -205,17 +231,22 @@ def _build_payload() -> dict:
         "detail": f"{scan_count} scans | {daily_trades_used} trades today",
     })
 
-    # RiskAgent
+    # RiskAgent — only "active" when engine is armed (token_ok), 
+    # otherwise "standby" on market closed days
     risk_ok = eng and hasattr(eng, "risk") and eng.risk is not None
-    risk_detail = "OK"
+    token_ok = getattr(eng, "token_ok", False) if eng else False
+    risk_detail = "Standby (market closed)"
+    risk_status = "offline"
     if risk_ok:
         if getattr(eng.risk, "engine_stopped", False):
+            risk_status = "stopped"
             risk_detail = f"STOPPED: {getattr(eng.risk, 'stop_reason', '?')}"
-        else:
+        elif token_ok:
+            risk_status = "active"
             risk_detail = f"PnL: Rs.{daily_pnl:+,.0f}"
     agents.append({
         "name": "RiskAgent",
-        "status": "stopped" if (risk_ok and getattr(eng.risk, "engine_stopped", False)) else ("active" if risk_ok else "offline"),
+        "status": risk_status,
         "detail": risk_detail,
     })
 
@@ -228,10 +259,19 @@ def _build_payload() -> dict:
     })
 
     # TickStore / WebSocket
+    if not has_tick_store:
+        ts_status = "offline"
+        ts_detail = "Not initialized (no market)"
+    elif ws_ok:
+        ts_status = "active"
+        ts_detail = f"Tick age: {tick_age}s"
+    else:
+        ts_status = "stale"
+        ts_detail = f"Tick age: {tick_age}s" if tick_age >= 0 else "No ticks yet"
     agents.append({
         "name": "TickStore (WS)",
-        "status": "active" if ws_ok else "stale",
-        "detail": f"Tick age: {tick_age}s" if tick_age >= 0 else "No ticks yet",
+        "status": ts_status,
+        "detail": ts_detail,
     })
 
     # AutoLogin
@@ -252,6 +292,15 @@ def _build_payload() -> dict:
         "detail": "260-day OHLCV loaded" if cache_ok else "Not loaded yet",
     })
 
+    # MacroAgent
+    macro_ok = eng and hasattr(eng, "macro") and eng.macro is not None and getattr(eng.macro, "_running", False)
+    agents.append({
+        "name": "MacroAgent",
+        "status": "active" if macro_ok else "offline",
+        "detail": "RSS Feeds Polling (5s)" if macro_ok else "News scanner not running",
+    })
+
+
     return {
         "type": "state",
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -265,6 +314,10 @@ def _build_payload() -> dict:
         "positions": positions,
         "agents": agents,
         "activity_log": list(_agent_log)[:50],
+        "news_feed": list(_news_feed)[:30],
+        "sector_pnl": {k: round(v, 2) for k, v in sector_pnl.items()},
+        "universe_count": universe_count,
+        "index_data": index_data,
     }
 
 
@@ -312,7 +365,7 @@ async def simulator_stream(websocket: WebSocket, days: int = 30, top: int = 50):
         import os
         sim_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "simulator.py")
         process = await asyncio.create_subprocess_exec(
-            sys.executable, sim_path, "--days", str(days), "--top", str(top),
+            sys.executable, "-u", sim_path, "--days", str(days), "--top", str(top),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT
         )
@@ -357,7 +410,7 @@ def start_api_server(engine_instance):
     engine_ref = engine_instance
     _boot_time = now_ist()
     print("[API] Starting Dashboard FastAPI Server on port 8000...")
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="error")
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     _uvicorn_server = uvicorn.Server(config)
     _uvicorn_server.run()
 

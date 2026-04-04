@@ -1,6 +1,46 @@
 import { useState, useEffect, useRef } from 'react';
 import './index.css';
 
+function PnlSparkline({ history }) {
+  const cleanHistory = (history || []).filter(v => typeof v === 'number' && !isNaN(v));
+  if (cleanHistory.length < 2) return null;
+  const min = Math.min(...cleanHistory);
+  const max = Math.max(...cleanHistory);
+  const range = (max - min) || 1;
+  const width = 120;
+  const height = 40;
+  const points = cleanHistory.map((val, i) => {
+    const x = (i / (cleanHistory.length - 1)) * width;
+    const y = height - ((val - min) / range) * height;
+    return `${x},${y}`;
+  }).join(' ');
+
+  const color = cleanHistory[cleanHistory.length-1] >= cleanHistory[0] ? 'var(--accent-green)' : 'var(--accent-red)';
+
+  return (
+    <svg width={width} height={height} style={{ overflow: 'visible' }}>
+      <defs>
+        <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.4" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polyline
+        fill="none"
+        stroke={color}
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={points}
+      />
+      <polygon
+        fill="url(#glow)"
+        points={`${points} ${width},${height} 0,${height}`}
+      />
+    </svg>
+  );
+}
+
 function SimulatorFloor() {
   const [days, setDays] = useState(30);
   const [top, setTop] = useState(50);
@@ -11,7 +51,9 @@ function SimulatorFloor() {
   const runSimulator = () => {
     setLogs([]);
     setRunning(true);
-    const ws = new WebSocket(`ws://localhost:8000/api/ws/simulator?days=${days}&top=${top}`);
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/api/ws/simulator?days=${days}&top=${top}`;
+    const ws = new WebSocket(wsUrl);
     
     ws.onmessage = (e) => {
       setLogs(prev => [...prev, e.data]);
@@ -20,31 +62,125 @@ function SimulatorFloor() {
       }
     };
     ws.onclose = () => setRunning(false);
-    ws.onerror = () => {
-      setLogs(prev => [...prev, "ERROR: Connection to simulator failed."]);
+    ws.onerror = (err) => {
+      console.error("WS Simulator Error:", err);
+      setLogs(prev => [...prev, "ERROR: Connection to simulator failed. Check if backend is running."]);
       setRunning(false);
     };
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%' }}>
-      <div className="glass-panel" style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '16px' }}>
-        <h3 style={{ margin: 0, width: '150px' }}>Sim Settings</h3>
-        <label className="text-sm">Days Back: 
-          <input type="number" className="input-field" style={{ marginLeft: '8px' }} value={days} onChange={e => setDays(Number(e.target.value))} />
-        </label>
-        <label className="text-sm">Top N Symbols:
-          <input type="number" className="input-field" style={{ marginLeft: '8px' }} value={top} onChange={e => setTop(Number(e.target.value))} />
-        </label>
-        <button className="panel-btn" onClick={runSimulator} disabled={running} style={{ marginLeft: 'auto' }}>
-          {running ? 'RUNNING...' : '▶ RUN BACKTEST'}
+    <div className="main-content animate-fade">
+      <div className="panel" style={{ flexDirection: 'row', gap: '24px', alignItems: 'center', flexShrink: 0, padding:'14px 20px' }}>
+        <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>SIMULATOR CONFIG</h3>
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
+          <label className="stat-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'none' }}>
+            Days Back
+            <input type="number" className="groww-input" value={days} onChange={e => setDays(Number(e.target.value))} style={{width: '60px', textAlign: 'center'}} />
+          </label>
+          <label className="stat-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', textTransform: 'none' }}>
+            Universe Size
+            <input type="number" className="groww-input" value={top} onChange={e => setTop(Number(e.target.value))} style={{width: '60px', textAlign: 'center'}} />
+          </label>
+        </div>
+        <button className="groww-action-btn" onClick={runSimulator} disabled={running} style={{ marginLeft: 'auto', padding: '10px 24px' }}>
+          {running ? 'ENGAGED...' : 'INITIALIZE BACKTEST'}
         </button>
       </div>
 
-      <div className="terminal-window" ref={termRef} style={{ flexGrow: 1 }}>
-        {logs.length === 0 && <div style={{opacity: 0.5}}>Ready to run simulation over {days} days on {top} symbols...</div>}
-        {logs.map((L, i) => <pre key={i}>{L}</pre>)}
+      <div className="panel" style={{ flex: 1, padding: '20px' }}>
+        <div className="terminal-window scrollable" ref={termRef} style={{ flexGrow: 1, height: '100%', minHeight: 0, border: 'none' }}>
+          {logs.length === 0 && <div style={{opacity: 0.3, fontFamily: 'Inter'}}>System ready. Awaiting simulation parameters...</div>}
+          {logs.map((L, i) => <pre key={i}>{L}</pre>)}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function TradeCalendar({ dates, selectedDate, onSelect }) {
+  const [viewDate, setViewDate] = useState(() => {
+    return selectedDate ? new Date(selectedDate) : new Date();
+  });
+  const [isOpen, setIsOpen] = useState(false);
+  const calendarRef = useRef(null);
+
+  useEffect(() => {
+    if (selectedDate) setViewDate(new Date(selectedDate));
+  }, [selectedDate]);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (calendarRef.current && !calendarRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  
+  const days = [];
+  for (let i = 0; i < firstDay; i++) days.push(null);
+  for (let i = 1; i <= daysInMonth; i++) days.push(i);
+
+  const prevMonth = () => setViewDate(new Date(year, month - 1, 1));
+  const nextMonth = () => setViewDate(new Date(year, month + 1, 1));
+
+  const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+  return (
+    <div ref={calendarRef} style={{ position: 'relative' }}>
+      <button 
+        className="groww-input" 
+        style={{ width: '200px', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <span>{selectedDate || 'Select Date'}</span> <span style={{ opacity: 0.8 }}>📅</span>
+      </button>
+
+      {isOpen && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '8px', background: '#121212', border: '1px solid #2a2a2a', borderRadius: '8px', padding: '16px', zIndex: 100, width: '290px', boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <button onClick={prevMonth} style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '1.2rem', padding: '0 8px' }}>&lsaquo;</button>
+            <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{monthNames[month]} {year}</div>
+            <button onClick={nextMonth} style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '1.2rem', padding: '0 8px' }}>&rsaquo;</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', textAlign: 'center', fontSize: '0.75rem', color: '#7b7b7b', marginBottom: '8px', fontWeight: 600 }}>
+            <div>SU</div><div>MO</div><div>TU</div><div>WE</div><div>TH</div><div>FR</div><div>SA</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px' }}>
+            {days.map((d, i) => {
+              if (!d) return <div key={i}></div>;
+              const dStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+              const hasData = dates.includes(dStr);
+              const isSelected = dStr === selectedDate;
+              return (
+                <button 
+                  key={i}
+                  disabled={!hasData}
+                  onClick={() => { onSelect(dStr); setIsOpen(false); }}
+                  style={{
+                    padding: '8px 0', border: 'none', borderRadius: '6px',
+                    background: isSelected ? '#1876D8' : hasData ? 'rgba(0, 208, 156, 0.15)' : 'transparent',
+                    color: isSelected ? '#fff' : hasData ? '#00D09C' : '#555',
+                    cursor: hasData ? 'pointer' : 'not-allowed',
+                    fontWeight: isSelected || hasData ? 600 : 400,
+                    outline: 'none',
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  {d}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -72,63 +208,82 @@ function HistoryFloor() {
   }, [selectedDate]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%' }}>
-      <div className="glass-panel" style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '16px' }}>
-        <h3 style={{ margin: 0 }}>Select Date</h3>
-        <select className="input-field" style={{ width: '200px' }} value={selectedDate} onChange={e => setSelectedDate(e.target.value)}>
-          {dates.map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
+    <div className="main-content animate-fade">
+      <div className="groww-panel" style={{ flexDirection: 'row', gap: '20px', alignItems: 'center', flexShrink: 0, padding:'14px 20px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+          <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>TRADE LOGS</h3>
+          <TradeCalendar dates={dates} selectedDate={selectedDate} onSelect={setSelectedDate} />
+        </div>
 
-        {summary && (
-          <div style={{ display: 'flex', gap: '20px', marginLeft: 'auto', alignItems: 'center' }}>
-            <span className="text-sm">Regime: <b style={{color: '#3b82f6'}}>{summary.regime}</b></span>
-            <span className="text-sm">Trades: <b>{summary.total_trades}</b></span>
-            <span className="text-sm">Win Rate: <b>{summary.win_rate}%</b></span>
-            <span className="text-sm">Net P&L: <b className={summary.gross_pnl >= 0 ? 'text-green' : 'text-red'}>Rs.{summary.gross_pnl}</b></span>
+        {summary && Object.keys(summary).length > 0 && (
+          <div style={{ display: 'flex', gap: '32px', marginLeft: 'auto', alignItems: 'center' }}>
+            <div className="flex-col" style={{gap: '2px'}}>
+              <div className="stat-label" style={{fontSize: '0.65rem'}}>REGIME</div>
+              <div className="text-blue" style={{fontWeight: 700}}>{summary.regime || 'UNKNOWN'}</div>
+            </div>
+            <div className="flex-col" style={{gap: '2px'}}>
+              <div className="stat-label" style={{fontSize: '0.65rem'}}>WIN RATE</div>
+              <div style={{fontWeight: 700}}>{summary.win_rate || 0}%</div>
+            </div>
+            <div className="flex-col" style={{gap: '2px', alignItems: 'flex-end'}}>
+              <div className="stat-label" style={{fontSize: '0.65rem'}}>NET P&L</div>
+              <div className={(summary.gross_pnl || 0) >= 0 ? 'text-green' : 'text-red'} style={{fontWeight: 700, fontSize: '1.1rem'}}>
+                {(summary.gross_pnl || 0) >= 0 ? '+' : ''}₹{Number(summary.gross_pnl || 0).toLocaleString('en-IN')}
+                {trades.length > 0 && <span style={{fontSize: '0.75rem', opacity: 0.6, marginLeft: '6px', fontWeight: 400}}>
+                  ({(((summary.gross_pnl || 0)/trades.reduce((s, t) => s + (t.qty * t.entry_price), 0)) * 100).toFixed(2)}%)
+                </span>}
+              </div>
+            </div>
           </div>
         )}
       </div>
 
-      <div className="bottom-split" style={{ height: '500px' }}>
-        <div className="glass-panel scrollable" style={{ flex: 2 }}>
-          <h3 style={{ marginBottom: '8px' }}>History Trades Table</h3>
-          {trades.length === 0 ? <p className="text-sm" style={{opacity:0.5}}>No trades found for {selectedDate}.</p> : (
-            <table>
-              <thead>
-                <tr>
-                  <th>TIME</th><th>SYMBOL</th><th>STRAT</th><th>QTY</th><th>ENTRY</th><th>EXIT</th><th>REASON</th><th>P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {trades.map((t, i) => (
-                  <tr key={i}>
-                    <td className="text-sm">{t.timestamp ? t.timestamp.substring(11,19) : ''}</td>
-                    <td style={{ fontWeight: 600 }}>{t.symbol}</td>
-                    <td><span className="badge">{t.strategy}</span></td>
-                    <td>{t.qty}</td>
-                    <td>{t.entry_price?.toFixed(1)}</td>
-                    <td>{t.full_exit_price?.toFixed(1)}</td>
-                    <td className="text-sm">{t.exit_reason}</td>
-                    <td style={{ fontWeight: 600 }} className={t.gross_pnl >= 0 ? 'text-green' : 'text-red'}>
-                      {t.gross_pnl >= 0 ? '+' : ''}{t.gross_pnl?.toFixed(0)}
-                    </td>
+      <div className="bottom-split" style={{ gap: '12px' }}>
+        <div className="panel" style={{ flex: 2, padding: 0 }}>
+          <div className="table-container scrollable">
+            {!selectedDate ? <p style={{padding: 20, opacity: 0.4}}>Initializing logs...</p> : trades.length === 0 ? <p style={{padding: 20, opacity: 0.4}}>No trades found for {selectedDate}</p> : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>ENTRY</th><th>EXIT</th><th>SYMBOL</th><th>STRAT</th><th>QTY</th><th>PRICE-IN</th><th>PRICE-OUT</th><th>REASON</th><th style={{textAlign: 'right'}}>ROI / P&L</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                </thead>
+                <tbody>
+                  {trades.map((t, i) => (
+                    <tr key={i}>
+                      <td className="text-muted" style={{fontSize: '0.75rem'}}>{t.entry_time ? t.entry_time.substring(11,16) : '--:--'}</td>
+                      <td className="text-muted" style={{fontSize: '0.75rem'}}>{t.exit_time ? t.exit_time.substring(11,16) : '--:--'}</td>
+                      <td className="symbol-cell">{t.symbol}</td>
+                      <td><span className={`badge ${t.strategy?.includes('SHORT') ? 'short' : 'long'}`}>{t.strategy}</span></td>
+                      <td>{t.qty}</td>
+                      <td>{t.entry_price?.toFixed(1)}</td>
+                      <td>{t.full_exit_price?.toFixed(1)}</td>
+                      <td className="text-muted">{t.exit_reason}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }} className={(t.gross_pnl || 0) >= 0 ? 'text-green' : 'text-red'}>
+                        <div style={{fontSize: '0.9rem'}}> {(t.gross_pnl || 0) >= 0 ? '+' : ''}₹{Math.abs(t.gross_pnl || 0).toFixed(0)}</div>
+                        <div style={{fontSize: '0.7rem', opacity: 0.6, fontWeight: 400}}>
+                          {(((t.gross_pnl || 0)/(t.qty * t.entry_price)) * 100).toFixed(2)}%
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
 
-        <div className="glass-panel scrollable" style={{ flex: 1 }}>
-          <h3 style={{ marginBottom: '8px' }}>Historical Agent Log</h3>
-          <div className="activity-log">
-            {logs.length === 0 ? <p className="text-sm" style={{opacity:0.5}}>No logs saved for this date.</p> : (
+        <div className="panel" style={{ flex: 1, padding: 0 }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-dim)' }}>
+            <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>AGENT FEED</h3>
+          </div>
+          <div className="activity-log scrollable" style={{ padding: '12px 16px', flex: 1 }}>
+            {logs.length === 0 ? <p style={{opacity: 0.3, padding: 20}}>Empty...</p> : (
               logs.map((entry, i) => (
                 <div key={i} className="log-entry">
                   <span className="log-time">{entry.time}</span>
                   <span className="log-agent">{entry.agent}</span>
-                  <span className="log-action">{entry.action}</span>
-                  {entry.detail && <span className="log-detail">{entry.detail}</span>}
+                  <span className="log-detail" style={{color: 'var(--text-primary)'}}>{entry.action} {entry.detail}</span>
                 </div>
               ))
             )}
@@ -140,85 +295,95 @@ function HistoryFloor() {
   );
 }
 
-function LiveFloor({ state, pnlClass, pnlSign, logEndRef }) {
+function LiveFloor({ state, logEndRef }) {
+  const pnlClass = state.pnl >= 0 ? 'text-green' : 'text-red';
+  const pnlSign = state.pnl >= 0 ? '+' : '-';
+
   return (
-    <>
-      <div className="stats-bar" style={{ marginBottom: '20px' }}>
-        <div className="stat-card glass-panel">
-          <div className="text-xs">Today's P&L</div>
-          <div className={`stat-value ${pnlClass}`}>
-            {pnlSign}Rs.{Math.abs(state.pnl).toLocaleString('en-IN', { minimumFractionDigits: 0 })}
+    <div className="main-content animate-fade">
+      <div className="stats-bar">
+        <div className="panel stat-card" style={{ position: 'relative', overflow: 'visible', background: 'var(--bg-elevated)', border: '1px solid var(--accent-blue)', boxShadow: '0 0 20px rgba(46, 157, 255, 0.1)' }}>
+          <div className="stat-label">Daily Net P&L</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div className={`stat-value ${pnlClass}`} style={{ fontSize: '1.4rem' }}>{pnlSign}₹{Math.round(Math.abs(state.pnl)).toLocaleString('en-IN')}</div>
+            <PnlSparkline history={state.pnl_history || []} />
           </div>
         </div>
-        <div className="stat-card glass-panel">
-          <div className="text-xs">Active Positions</div>
+        <div className="panel stat-card">
+          <div className="stat-label">Positions</div>
           <div className="stat-value text-blue">{state.positions.length}</div>
         </div>
-        <div className="stat-card glass-panel">
-          <div className="text-xs">Scans Today</div>
-          <div className="stat-value" style={{ color: '#c084fc' }}>{state.scan_count}</div>
+        <div className="panel stat-card">
+          <div className="stat-label">Regime</div>
+          <div className="stat-value" style={{color: 'var(--accent-purple)'}}>{state.regime.split('_')[0]}</div>
         </div>
-        <div className="stat-card glass-panel" title="Maximum trades are now unlimited, constrained only by available margin capital">
-          <div className="text-xs">Trades Today</div>
-          <div className="stat-value" style={{ color: '#f59e0b' }}>{state.daily_trades_used} <span style={{fontSize: '0.6em', opacity: 0.7}}>/ ∞</span></div>
+        <div className="panel stat-card">
+          <div className="stat-label">Efficiency</div>
+          <div className="stat-value" style={{color: 'var(--accent-yellow)'}}>{state.daily_trades_used} Trd</div>
         </div>
-        <div className="stat-card glass-panel">
-          <div className="text-xs">Tick Store</div>
-          <div className="stat-value" style={{ color: state.ws_connected ? '#10b981' : '#ef4444', fontSize: '1rem' }}>
-            {state.ws_connected ? 'LIVE' : 'STALE'}
-            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: 6 }}>
-              {state.tick_age >= 0 ? `${state.tick_age}s ago` : ''}
-            </span>
+        <div className="panel stat-card">
+          <div className="stat-label">System Health</div>
+          <div className="stat-value" style={{ color: state.ws_connected ? 'var(--accent-green)' : 'var(--accent-yellow)', fontSize: '1rem' }}>
+            {state.ws_connected ? 'OPERATIONAL' : 'MARKET CLOSED'}
           </div>
         </div>
       </div>
 
       <div className="bottom-split">
-        <div className="glass-panel scrollable" style={{ flex: 2 }}>
-          <h3 style={{ marginBottom: '4px' }}>Live Trading Floor</h3>
-          {state.positions.length === 0 ? (
-            <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.5 }}>
-              <div className="text-sm">No active positions. Scanning {state.scan_count > 0 ? '250' : '...'} symbols</div>
-            </div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>SYMBOL</th><th>STRATEGY</th><th>QTY</th><th>ENTRY</th><th>LTP</th><th>TARGET</th><th>STOPLOSS</th><th>P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {state.positions.map((pos, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{pos.symbol}</td>
-                    <td><span className={`badge ${pos.is_short ? 'short' : 'long'}`}>{pos.strategy}</span></td>
-                    <td>{pos.qty}</td>
-                    <td>Rs.{pos.entry?.toFixed(1)}</td>
-                    <td className="text-blue" style={{ fontWeight: 600 }}>Rs.{pos.ltp?.toFixed(1)}</td>
-                    <td className="text-green">Rs.{pos.target?.toFixed(1)}</td>
-                    <td className="text-red">Rs.{pos.stop?.toFixed(1)}</td>
-                    <td style={{ fontWeight: 600 }} className={pos.unrealized_pnl >= 0 ? 'text-green' : 'text-red'}>
-                      {pos.unrealized_pnl >= 0 ? '+' : ''}Rs.{pos.unrealized_pnl?.toFixed(0)}
-                    </td>
+        <div className="panel" style={{ flex: 2, padding: 0 }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-dim)', display: 'flex', justifyContent: 'space-between' }}>
+            <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>ACTIVE FLOOR</h3>
+            <span className="text-muted" style={{fontSize: '0.75rem'}}>{state.universe_count || 0} SYMBOLS LOADED</span>
+          </div>
+          <div className="table-container scrollable">
+            {state.positions.length === 0 ? (
+              <div style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.3 }}>
+                Waiting for trading signals...
+              </div>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>ENTRY</th><th>SYMBOL</th><th>STRAT</th><th>QTY</th><th>AVG PRICE</th><th>LTP</th><th>TARGET</th><th>P&L / ROI</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                </thead>
+                <tbody>
+                  {state.positions.map((pos, i) => (
+                    <tr key={i}>
+                      <td className="text-muted" style={{fontSize: '0.75rem'}}>{pos.entry_time ? pos.entry_time.substring(11,16) : '--:--'}</td>
+                      <td className="symbol-cell">{pos.symbol}</td>
+                      <td><span className={`badge ${pos.is_short ? 'short' : 'long'}`}>{pos.strategy}</span></td>
+                      <td>{pos.qty}</td>
+                      <td>{pos.entry?.toFixed(1)}</td>
+                      <td className="text-blue" style={{ fontWeight: 600 }}>{pos.ltp?.toFixed(1)}</td>
+                      <td className="text-green">{pos.target?.toFixed(1)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }} className={pos.unrealized_pnl >= 0 ? 'text-green' : 'text-red'}>
+                        <div style={{fontSize: '0.9rem'}}> {pos.unrealized_pnl >= 0 ? '+' : ''}₹{Math.abs(pos.unrealized_pnl).toFixed(0)}</div>
+                        <div style={{fontSize: '0.7rem', opacity: 0.6, fontWeight: 400}}>
+                          {(((pos.unrealized_pnl || 0)/(pos.qty * pos.entry)) * 100).toFixed(2)}%
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
 
-        <div className="glass-panel scrollable" style={{ flex: 1 }}>
-          <h3 style={{ marginBottom: '8px' }}>Agent Activity Log</h3>
-          <div className="activity-log">
+        <div className="panel" style={{ flex: 1, padding: 0 }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-dim)' }}>
+            <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>AGENT FEED</h3>
+          </div>
+          <div className="activity-log scrollable" style={{ padding: '12px 16px', flex: 1 }}>
             {state.activity_log.length === 0 ? (
-              <div className="text-sm" style={{ opacity: 0.4, textAlign: 'center', marginTop: '40px' }}>Waiting for engine actions...</div>
+              <p style={{opacity: 0.3, padding: 20}}>Awaiting activity...</p>
             ) : (
               state.activity_log.map((entry, i) => (
-                <div key={`${entry.time}-${entry.agent}-${i}`} className="log-entry">
+                <div key={i} className="log-entry">
                   <span className="log-time">{entry.time}</span>
                   <span className="log-agent">{entry.agent}</span>
-                  <span className="log-action">{entry.action}</span>
-                  {entry.detail && <span className="log-detail">{entry.detail}</span>}
+                  <span className="log-detail" style={{color: 'var(--text-primary)'}}>{entry.action} {entry.detail}</span>
                 </div>
               ))
             )}
@@ -226,13 +391,85 @@ function LiveFloor({ state, pnlClass, pnlSign, logEndRef }) {
           </div>
         </div>
       </div>
-    </>
+    </div>
+  );
+}
+
+function NewsFeedFloor({ state }) {
+  const feed = state.news_feed || [];
+  const sentimentColor = { bullish: 'var(--accent-green)', bearish: 'var(--accent-red)', neutral: 'var(--text-muted)' };
+  const sentimentBg = { bullish: 'rgba(0,208,156,0.06)', bearish: 'rgba(255,77,77,0.06)', neutral: 'transparent' };
+  const sentimentLabel = { bullish: 'BULL', bearish: 'BEAR', neutral: 'NEUTRAL' };
+
+  return (
+    <div className="main-content animate-fade">
+      <div className="panel" style={{ padding: '16px 20px', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h3 className="stat-label">Market Intelligence Feed</h3>
+          <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '4px' }}>Real-time headlines from Economic Times, CNBC TV18, Livemint &amp; more, filtered &amp; sentiment-scored by the MacroAgent.</p>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div className="stat-label">Headlines</div>
+          <div className="stat-value text-blue">{feed.length}</div>
+        </div>
+      </div>
+
+      <div className="panel" style={{ flex: 1, padding: 0, overflow: 'hidden' }}>
+        <div className="table-container scrollable">
+          {feed.length === 0 ? (
+            <div style={{ padding: '60px', textAlign: 'center', opacity: 0.3 }}>
+              <div style={{ fontSize: '2rem', marginBottom: '12px' }}>📡</div>
+              <div>MacroAgent is scanning 5 RSS feeds every 5 seconds.</div>
+              <div style={{ fontSize: '0.8rem', marginTop: '8px' }}>News will appear here when headlines match your universe symbols.</div>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: '50px' }}>TIME</th>
+                  <th style={{ width: '80px' }}>SIGNAL</th>
+                  <th style={{ width: '80px' }}>SYMBOL</th>
+                  <th>HEADLINE</th>
+                  <th style={{ width: '140px', textAlign: 'right' }}>SOURCE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {feed.map((item, i) => (
+                  <tr key={i} style={{ background: sentimentBg[item.sentiment] }}>
+                    <td className="text-muted" style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{item.time}</td>
+                    <td>
+                      <span style={{
+                        padding: '3px 8px', borderRadius: '4px', fontSize: '0.65rem',
+                        fontWeight: 800, letterSpacing: '0.05em',
+                        color: sentimentColor[item.sentiment],
+                        border: `1px solid ${sentimentColor[item.sentiment]}`,
+                        opacity: 0.9
+                      }}>{sentimentLabel[item.sentiment]}</span>
+                    </td>
+                    <td style={{ fontWeight: 700, color: sentimentColor[item.sentiment], fontSize: '0.8rem' }}>
+                      {item.symbol || '—'}
+                    </td>
+                    <td style={{ fontSize: '0.85rem', lineHeight: 1.4 }}>{item.title}</td>
+                    <td style={{ textAlign: 'right', fontSize: '0.7rem', opacity: 0.5 }}>{item.source}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
 function App() {
   const [activeTab, setActiveTab] = useState('live');
   const [state, setState] = useState({
+    pnl_history: [],
+    news_feed: [],
+    sector_pnl: {},
+    index_data: { nifty50: null, banknifty: null, vix: null },
+    universe_count: 0,
     status: 'connecting', regime: 'UNKNOWN', pnl: 0, uptime: '0h 0m 0s',
     scan_count: 0, daily_trades_used: 0, ws_connected: false,
     tick_age: -1, positions: [], agents: [], activity_log: [], timestamp: ''
@@ -252,15 +489,27 @@ function App() {
     let ws;
     let reconnectTimeout = null;
     const connect = () => {
-      ws = new WebSocket('ws://localhost:8000/api/ws');
-      ws.onopen = () => setWsConnected(true);
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      // In dev: Vite proxies /api/* to localhost:8000. In prod: same host serves the API.
+      const wsUrl = `${wsProtocol}//${window.location.host}/api/ws`;
+      console.log('[WS] Connecting to', wsUrl);
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => { console.log('[WS] Connected'); setWsConnected(true); };
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === 'state') setState(data);
+          if (data.type === 'state') {
+            setState(prev => {
+              const currentPnl = typeof data.pnl === 'number' ? data.pnl : 0;
+              const newHistory = [...(prev.pnl_history || []).slice(-29), currentPnl];
+              return { ...prev, ...data, pnl_history: newHistory };
+            });
+          }
         } catch (e) { console.error("Parse error:", e); }
       };
-      ws.onclose = () => {
+      ws.onerror = (err) => { console.error('[WS] Error', err); };
+      ws.onclose = (e) => {
+        console.warn(`[WS] Disconnected (code=${e.code}). Reconnecting in 3s...`);
         setWsConnected(false);
         reconnectTimeout = setTimeout(connect, 3000);
       };
@@ -268,61 +517,57 @@ function App() {
     connect();
     return () => {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+
       if (ws) ws.close();
     };
   }, []);
 
-  const pnlClass = state.pnl >= 0 ? 'text-green' : 'text-red';
-  const pnlSign = state.pnl >= 0 ? '+' : '';
-  const regimeColor = {
-    'BULL': '#10b981', 'NORMAL': '#3b82f6', 'VOLATILE': '#f59e0b',
-    'BEAR_PANIC': '#ef4444', 'EXTREME_PANIC': '#dc2626', 'OFFLINE': '#6b7280'
-  }[state.regime] || '#8b5cf6';
-  const agentStatusColor = (s) => s === 'active' ? '#10b981' : s === 'stopped' ? '#ef4444' : s === 'stale' ? '#f59e0b' : '#6b7280';
+  const agentStatusColor = (s) => s === 'active' ? '#00D09C' : s === 'stopped' ? '#FF4D4D' : s === 'stale' ? '#FFB319' : '#475569';
 
   return (
     <>
-      <div className="sidebar glass-panel">
-        <div className="flex-col" style={{ marginBottom: '24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 16 }}>V19</div>
+      <div className="sidebar">
+        <div className="flex-col" style={{ marginBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'linear-gradient(135deg, #2E9DFF, #9061F9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 18, color: '#fff' }}>V20</div>
             <div>
-              <h2 style={{ letterSpacing: '-0.03em', fontSize: '1.1rem', margin: 0 }}>BNF Engine</h2>
-              <span className="text-sm" style={{ fontSize: '0.7rem' }}>God's Eye Dashboard</span>
+              <h2 style={{ letterSpacing: '-0.04em', fontSize: '1.2rem', margin: 0, fontWeight: 700 }}>BNF ENGINE</h2>
+              <span className="text-muted" style={{ fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.05em' }}>QUANTUM TERMINAL</span>
             </div>
           </div>
         </div>
-        <div className="sidebar-section" style={{ borderBottom: 'none', paddingBottom: '0' }}>
-          <div className="text-xs text-primary" style={{letterSpacing: '0.1em', fontSize: '0.65rem'}}>LOCAL TIME (IST)</div>
-          <div style={{ marginTop: '8px', fontSize: '2rem', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-blue)', letterSpacing: '-0.02em', textShadow: '0 0 12px rgba(59, 130, 246, 0.4)' }}>
-            {digitalClock || '--:--:--'}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div>
+            <div className="stat-label" style={{marginBottom: 4}}>Local Time</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 700, fontFamily: 'Outfit', color: 'var(--accent-blue)', letterSpacing: '-0.02em' }}>
+              {digitalClock || '--:--:--'}
+            </div>
+          </div>
+
+          <div className="agent-row">
+            <span className="stat-label">Network</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div className={`agent-dot ${wsConnected ? 'status-live' : 'status-offline'}`}></div>
+              <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>{wsConnected ? 'Connected' : 'Syncing'}</span>
+            </div>
+          </div>
+
+          <div className="agent-row">
+            <span className="stat-label">Uptime</span>
+            <span style={{ fontWeight: 600, fontSize: '0.8rem', opacity: 0.8 }}>{state.uptime}</span>
           </div>
         </div>
-        <div className="sidebar-section">
-          <div className="text-xs">Dashboard Link</div>
-          <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center' }}>
-            <span className={`status-dot ${wsConnected ? 'live' : 'offline'}`}></span>
-            <span style={{ fontWeight: 500, fontSize: '0.85rem' }}>{wsConnected ? 'Connected' : 'Reconnecting...'}</span>
-          </div>
-        </div>
-        <div className="sidebar-section">
-          <div className="text-xs">Market Regime</div>
-          <div style={{ marginTop: '6px', fontWeight: 700, fontSize: '1.15rem', color: regimeColor }}>{state.regime.replace(/_/g, ' ')}</div>
-        </div>
-        <div className="sidebar-section">
-          <div className="text-xs">Engine Uptime</div>
-          <div style={{ marginTop: '6px', fontWeight: 500, fontSize: '0.95rem', fontFamily: 'monospace' }}>{state.uptime}</div>
-        </div>
-        <div className="sidebar-section" style={{ marginTop: '8px', flexGrow: 1 }}>
-          <div className="text-xs" style={{ marginBottom: '10px' }}>System Agents</div>
-          <div className="agent-list scrollable">
+
+        <div style={{ marginTop: 'auto' }}>
+          <div className="stat-label" style={{ marginBottom: '12px' }}>Operational Nodes</div>
+          <div className="scrollable" style={{ maxHeight: '300px' }}>
             {state.agents.map((agent, i) => (
-              <div key={i} className="agent-row">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div key={i} className="agent-row" style={{padding: '8px 0'}}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <div className="agent-dot" style={{ background: agentStatusColor(agent.status) }}></div>
-                  <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>{agent.name}</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.75rem', opacity: 0.9 }}>{agent.name}</span>
                 </div>
-                <div className="text-sm" style={{ fontSize: '0.7rem', marginTop: '2px', paddingLeft: '18px' }}>{agent.detail}</div>
               </div>
             ))}
           </div>
@@ -331,14 +576,30 @@ function App() {
 
       <div className="main-content">
         <div className="top-nav">
-          <button className={`tab-btn ${activeTab === 'live' ? 'active' : ''}`} onClick={() => setActiveTab('live')}>Live Floor</button>
-          <button className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>Trade History</button>
-          <button className={`tab-btn ${activeTab === 'simulator' ? 'active' : ''}`} onClick={() => setActiveTab('simulator')}>Simulator</button>
+          <button className={`tab-btn ${activeTab === 'live' ? 'active' : ''}`} onClick={() => setActiveTab('live')}>EXCHANGE</button>
+          <button className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>JOURNAL</button>
+          <button className={`tab-btn ${activeTab === 'simulator' ? 'active' : ''}`} onClick={() => setActiveTab('simulator')}>QUANT SIM</button>
+          <button className={`tab-btn ${activeTab === 'news' ? 'active' : ''}`} onClick={() => setActiveTab('news')}>NEWS FEED</button>
+          
+          <div className="ticker-wrap" style={{marginLeft:'auto', display:'flex', alignItems:'center', gap:'20px', paddingLeft: '40px'}}>
+             <div className="ticker-item"><span className="stat-label">NIFTY 50</span> <span className={state.index_data?.nifty50 ? 'text-green' : 'text-muted'} style={{fontWeight:800}}>{state.index_data?.nifty50 ? state.index_data.nifty50.toLocaleString('en-IN') : '—'}</span></div>
+             <div className="ticker-item"><span className="stat-label">BANK NIFTY</span> <span className={state.index_data?.banknifty ? 'text-green' : 'text-muted'} style={{fontWeight:800}}>{state.index_data?.banknifty ? state.index_data.banknifty.toLocaleString('en-IN') : '—'}</span></div>
+             <div className="ticker-item"><span className="stat-label">INDIA VIX</span> <span className={state.index_data?.vix ? 'text-blue' : 'text-muted'} style={{fontWeight:800}}>{state.index_data?.vix ?? '—'}</span></div>
+          </div>
         </div>
 
-        {activeTab === 'live' && <LiveFloor state={state} pnlClass={pnlClass} pnlSign={pnlSign} logEndRef={logEndRef} />}
-        {activeTab === 'history' && <HistoryFloor />}
-        {activeTab === 'simulator' && <SimulatorFloor />}
+        <div style={{ display: activeTab === 'live' ? 'contents' : 'none' }}>
+          <LiveFloor state={state} logEndRef={logEndRef} />
+        </div>
+        <div style={{ display: activeTab === 'history' ? 'contents' : 'none' }}>
+          <HistoryFloor />
+        </div>
+        <div style={{ display: activeTab === 'simulator' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
+          <SimulatorFloor />
+        </div>
+        <div style={{ display: activeTab === 'news' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
+          <NewsFeedFloor state={state} />
+        </div>
       </div>
     </>
   );

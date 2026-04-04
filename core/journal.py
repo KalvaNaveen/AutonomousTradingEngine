@@ -18,6 +18,7 @@ class Journal:
                 CREATE TABLE IF NOT EXISTS trades (
                     id                INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp         TEXT, date TEXT,
+                    entry_time        TEXT,
                     symbol            TEXT, strategy TEXT, regime TEXT,
                     rvol              REAL, deviation_pct REAL,
                     entry_price       REAL, partial_exit_price REAL,
@@ -29,6 +30,12 @@ class Journal:
                     daily_pnl_after   REAL
                 )
             """)
+            # Migration: Add entry_time column to existing trades table
+            try:
+                conn.execute("ALTER TABLE trades ADD COLUMN entry_time TEXT")
+            except Exception:
+                pass # Already exists
+
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_trades_date
                 ON trades(date)
@@ -80,13 +87,15 @@ class Journal:
         with sqlite3.connect(JOURNAL_DB) as conn:
             conn.execute("""
                 INSERT INTO trades
-                (timestamp, date, symbol, strategy, regime, rvol, deviation_pct,
+                (timestamp, date, entry_time, symbol, strategy, regime, rvol, deviation_pct,
                  entry_price, partial_exit_price, partial_exit_qty,
                  full_exit_price, qty, gross_pnl, stop_hit, time_stop_hit,
                  exit_reason, hold_minutes, daily_pnl_after)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 now.isoformat(), now.strftime("%Y-%m-%d"),
+                et.isoformat() if isinstance(et, datetime.datetime) else str(et),
+
                 trade.get("symbol", ""), trade.get("strategy", ""),
                 trade.get("regime", ""), trade.get("rvol", 0),
                 trade.get("deviation_pct", 0), trade.get("entry_price", 0),
@@ -229,7 +238,7 @@ class Journal:
         with sqlite3.connect(JOURNAL_DB) as conn:
             rows = conn.execute("""
                 SELECT symbol, strategy, entry_price, full_exit_price,
-                       gross_pnl, exit_reason, qty
+                       gross_pnl, exit_reason, qty, entry_time, timestamp
                 FROM trades
                 WHERE date = ?
                 ORDER BY timestamp ASC
@@ -237,7 +246,7 @@ class Journal:
         return [
             {"symbol": r[0], "strategy": r[1], "entry_price": r[2],
              "full_exit_price": r[3], "gross_pnl": r[4], "exit_reason": r[5],
-             "qty": r[6]}
+             "qty": r[6], "entry_time": r[7], "exit_time": r[8]}
             for r in rows
         ]
 

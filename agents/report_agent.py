@@ -137,7 +137,7 @@ def _notes_period(stats: dict, label: str) -> list:
 
 
 # =====================================================================
-#  1. DAILY REPORT — Telegram Message Only (No PDF)
+#  1. DAILY REPORT — PDF via Telegram
 # =====================================================================
 
 def build_daily_report(
@@ -162,112 +162,19 @@ def build_daily_report(
     avg_win = stats.get("avg_win", 0)
     avg_loss = stats.get("avg_loss", 0)
 
-    lines = []
-    lines.append(f"[INFO] *FULL DAY REPORT — {date_str}*")
-    lines.append(_separator())
-
-    # Market Context
-    lines.append("")
-    lines.append("🏦 *MARKET CONTEXT*")
-    if nifty_price > 0:
-        nifty_icon = "📈" if nifty_change_pct >= 0 else "📉"
-        lines.append(f"{nifty_icon} Nifty 50: Rs.{nifty_price:,.2f} ({nifty_change_pct:+.2f}%)")
-    if vix > 0:
-        lines.append(f"🌡️ India VIX: {vix:.2f}")
-    lines.append(f"🧠 Regime: `{regime}`")
-
-    # P&L Summary
-    lines.append("")
-    lines.append("💰 *P&L SUMMARY*")
-    lines.append(f"{_emoji_pnl(pnl)} Net P&L: `{_fmt(pnl)}`")
-    lines.append(f"📊 Day ROI: `{_pct(day_roi)}`")
-
-    # Trade Breakdown
-    lines.append("")
-    lines.append("[INFO] *TRADE BREAKDOWN*")
-    lines.append(f"Total: `{total}` ({wins}W / {losses}L)")
-    lines.append(f"🎯 Win Rate: `{wr:.1f}%`")
-    if avg_win != 0:
-        lines.append(f"📈 Avg Win: `{_fmt(avg_win)}`")
-    if avg_loss != 0:
-        lines.append(f"📉 Avg Loss: `{_fmt(avg_loss)}`")
-
-    # Strategy Breakdown
-    strat_stats = defaultdict(lambda: {"count": 0, "wins": 0, "pnl": 0.0})
-    for t in trades_today:
-        s = t.get("strategy", "UNKNOWN")
-        strat_stats[s]["count"] += 1
-        strat_stats[s]["pnl"] += t.get("gross_pnl", 0)
-        if t.get("gross_pnl", 0) > 0:
-            strat_stats[s]["wins"] += 1
-    if strat_stats:
-        lines.append("")
-        lines.append("📊 *STRATEGY BREAKDOWN*")
-        for strat, sd in strat_stats.items():
-            swr = sd["wins"] / max(1, sd["count"]) * 100
-            lines.append(f"• `{strat}`: {sd['count']}T | WR {swr:.0f}% | {_fmt(sd['pnl'])}")
-
-    # Trade Log
-    if trades_today:
-        lines.append("")
-        lines.append("🔄 *TRADE LOG*")
-        for t in trades_today:
-            icon = _trade_icon(t.get("gross_pnl", 0))
-            sym = t.get("symbol", "???")
-            strat = t.get("strategy", "")
-            entry_px = t.get("entry_price", 0)
-            exit_px = t.get("full_exit_price", 0)
-            t_pnl = t.get("gross_pnl", 0)
-            reason = t.get("exit_reason", "")
-            qty = t.get("qty", 0)
-            lines.append(
-                f"{icon} `{sym}` | {strat} | Qty: {qty}\n"
-                f"    Rs.{entry_px:,.1f} → Rs.{exit_px:,.1f} | {_fmt(t_pnl)} ({reason})"
-            )
-
-    # Top 5 Winners
-    sorted_wins = sorted([t for t in trades_today if t.get("gross_pnl", 0) > 0],
-                         key=lambda x: x.get("gross_pnl", 0), reverse=True)[:5]
-    sorted_losses = sorted([t for t in trades_today if t.get("gross_pnl", 0) < 0],
-                           key=lambda x: x.get("gross_pnl", 0))[:5]
-    if sorted_wins:
-        lines.append("")
-        lines.append("🏆 *TOP WINNERS*")
-        for t in sorted_wins:
-            lines.append(f"  [PASS] `{t['symbol']}` {_fmt(t['gross_pnl'])}")
-    if sorted_losses:
-        lines.append("")
-        lines.append("[STOP] *TOP LOSERS*")
-        for t in sorted_losses:
-            lines.append(f"  [FAIL] `{t['symbol']}` {_fmt(t['gross_pnl'])}")
-
-    # Capital Status
-    lines.append("")
-    lines.append("💼 *CAPITAL STATUS*")
-    lines.append(f"Simulated Starting: `Rs.{capital:,.0f}`")
-    lines.append(f"Simulated Closing: `Rs.{closing_capital:,.0f}`")
-    lines.append(f"Sim Total Return: `{_pct(day_roi)}`")
-    if real_capital is not None:
-        lines.append(f"🟢 *Real Zerodha Available*: `Rs.{real_capital:,.0f}`")
-
-    # System Health
-    lines.append("")
-    lines.append("⚙️ *SYSTEM HEALTH*")
-    lines.append(f"🤖 Agent Uptime: 100%")
-    lines.append(f"🔄 Scans Run: `{total_scans}`")
-
-    # AI Insights
-    notes = _notes_daily(stats)
-    if notes:
-        lines.append("")
-        lines.append("📝 *POST-MARKET NOTES*")
-        for tip in notes:
-            lines.append(f"• {tip}")
-
-    lines.append("")
-    lines.append(f"⏰ Report generated at {now_ist().strftime('%H:%M')} IST")
-
-    msg_text = "\n".join(lines)
+    caption = (
+        f"📅 *DAILY REPORT* : {date_str}\n"
+        f"{_separator()}\n"
+        f"{_emoji_pnl(pnl)} Net P&L: `{_fmt(pnl)}`\n"
+        f"📊 Day ROI: `{_pct(day_roi)}`\n\n"
+        f"Trades: `{total}` ({wins}W / {losses}L)\n"
+        f"🎯 Win Rate: `{wr:.1f}%`\n"
+        f"🧠 Regime: `{regime}`\n\n"
+        f"📎 Full PDF report attached below."
+    )
+    
+    if total == 0:
+        return f"📅 *DAILY REPORT* : {date_str}\nNo trades executed today. Engine healthy."
 
     # Automatically generate and send PDF if there were trades today
     if trades_today and FPDF is not None:
@@ -288,7 +195,7 @@ def build_daily_report(
         except Exception as e:
             print(f"[REPORT] Failed to build daily PDF: {e}")
 
-    return msg_text
+    return caption
 
 
 # =====================================================================

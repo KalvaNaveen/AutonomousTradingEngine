@@ -72,7 +72,8 @@ class ExecutionAgent:
         qty = self.risk.calculate_position_size(
             signal["entry_price"], signal["stop_price"],
             regime=regime,
-            strategy=signal.get("strategy", "")
+            strategy=signal.get("strategy", ""),
+            symbol=signal.get("symbol", "")
         )
         if qty == 0:
             return False
@@ -87,6 +88,15 @@ class ExecutionAgent:
 
         # Route through Go executor if available, else Python
         go_bridge = getattr(self, '_go_bridge', None)
+        
+        strat = signal.get("strategy", "")
+        # Momentum breakouts & Macro news must be MARKET orders to guarantee fill on volatile push.
+        is_momentum = any(s in strat for s in ["S3", "S6", "S8", "MACRO"])
+        
+        go_order_type = "MARKET" if is_momentum else "LIMIT"
+        py_order_type = self.kite.ORDER_TYPE_MARKET if is_momentum else self.kite.ORDER_TYPE_LIMIT
+        py_order_price = 0 if is_momentum else round(signal["entry_price"] * (0.998 if is_short else 1.002), 1)
+
         if go_bridge and go_bridge.is_connected():
             try:
                 go_signal = {
@@ -94,9 +104,9 @@ class ExecutionAgent:
                     "symbol": signal["symbol"],
                     "exchange": "NSE",
                     "qty": qty,
-                    "price": round(signal["entry_price"] * (0.998 if is_short else 1.002), 1),
+                    "price": py_order_price,
                     "trigger_price": 0,
-                    "order_type": "LIMIT",
+                    "order_type": go_order_type,
                     "product": "MIS",
                     "validity": "DAY",
                     "tag": signal.get("strategy", "BNF"),
@@ -118,8 +128,8 @@ class ExecutionAgent:
                         transaction_type=txn_type,
                         quantity=qty,
                         product=product,
-                        order_type=self.kite.ORDER_TYPE_LIMIT,
-                        price=round(signal["entry_price"] * (0.998 if is_short else 1.002), 1),
+                        order_type=py_order_type,
+                        price=py_order_price,
                         validity=self.kite.VALIDITY_DAY
                     )
                 except Exception as e2:
@@ -134,8 +144,8 @@ class ExecutionAgent:
                     transaction_type=txn_type,
                     quantity=qty,
                     product=product,
-                    order_type=self.kite.ORDER_TYPE_LIMIT,
-                    price=round(signal["entry_price"] * (0.998 if is_short else 1.002), 1),
+                    order_type=py_order_type,
+                    price=py_order_price,
                     validity=self.kite.VALIDITY_DAY
                 )
             except Exception as e:

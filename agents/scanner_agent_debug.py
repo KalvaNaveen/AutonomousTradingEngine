@@ -325,12 +325,15 @@ class ScannerAgent:
         Risk: Max 1% per trade. No trade if ADX < 25.
         """
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if regime == "EXTREME_PANIC":
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         signals = []
@@ -476,12 +479,15 @@ class ScannerAgent:
         Risk: 0.5% max. Avoid if VIX > 20.
         """
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if regime == "EXTREME_PANIC":
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         # MD: Avoid if VIX > 20
@@ -616,12 +622,15 @@ class ScannerAgent:
     # ══════════════════════════════════════════════════════════════
     def scan_s3_orb(self, regime: str) -> list:
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if regime not in ["BULL", "VOLATILE"]:   # Only strong regimes
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         # Max 5 S3 trades per day (was 1 — too restrictive)
@@ -697,12 +706,15 @@ class ScannerAgent:
         stock underperforming Nifty by >= 1%, price < Day Open.
         """
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if regime in ("BULL", "EXTREME_PANIC"):
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         nifty_ltp  = self.data.tick_store.get_ltp_if_fresh(NIFTY50_TOKEN)
@@ -806,12 +818,15 @@ class ScannerAgent:
 
     def scan_s6_vwap_band(self, regime: str) -> list:
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if regime == "EXTREME_PANIC":
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         signals = []
@@ -889,12 +904,15 @@ class ScannerAgent:
         price < Lower BB, RVOL >= 1.2, exit to VWAP.
         """
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if regime in ("EXTREME_PANIC", "BEAR_PANIC"):
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         signals = []
@@ -1007,12 +1025,15 @@ class ScannerAgent:
         Risk: 0.75%. Trailing to next level.
         """
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if regime == "EXTREME_PANIC":
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         # [PATCH 4] Start at 10:00 not 09:45
@@ -1162,12 +1183,15 @@ class ScannerAgent:
     def scan_s9_mtf_momentum(self, regime: str) -> list:
         """S9: Multi-Timeframe Trend + Momentum (Daily 200 EMA + 15-min RSI + MACD)"""
         if not self.is_in_trade_window():
+            print('Blocked by trade window')
             return []
         if regime not in ["BULL", "NORMAL", "VOLATILE", "CHOP"]:   # CHOP allowed only with strong volume
             return []
         if not self._check_daily_trade_limit():
+            print('Blocked by daily limit')
             return []
         if not self._cache_ts_ready():
+            print('Blocked by cache ready')
             return []
 
         signals = []

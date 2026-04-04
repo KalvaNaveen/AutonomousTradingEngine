@@ -149,6 +149,7 @@ class BNFEngine:
                 pass
         self.ticker = KiteTicker(KITE_API_KEY, access_token)
         self.ticker.on_ticks   = self.tick_store.on_ticks
+        self.ticker.on_order_update = lambda ws, data: self.execution.fill_monitor.on_order_update(ws, data)
         self.ticker.on_connect = lambda ws, r: (
             ws.subscribe(sub_tokens),
             ws.set_mode(ws.MODE_FULL, sub_tokens)
@@ -232,6 +233,9 @@ class BNFEngine:
             self._init_kite()
             self.token_ok = True
             log_agent_action("AutoLogin", "TOKEN_OK", "Access token refreshed successfully")
+            # Start MacroAgent background news scanner
+            if hasattr(self, "macro") and self.macro:
+                self.macro.start()
         else:
             self.token_ok = False
             log_agent_action("AutoLogin", "TOKEN_FAIL", "Token refresh FAILED")
@@ -399,7 +403,8 @@ class BNFEngine:
             # Still monitor open positions even outside trading hours
             self.execution.monitor_positions(
                 daily_cache=self.daily_cache,
-                tick_store=self.tick_store
+                tick_store=self.tick_store,
+                current_regime=self.regime
             )
             return
 
@@ -432,20 +437,37 @@ class BNFEngine:
         if not hasattr(self, "scan_executor"):
             self.scan_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
-        scan_tasks = {
+        # Strategy name -> DISABLED_STRATEGIES key mapping
+        _strat_disable_map = {
+            "S1": "S1_MA_CROSS",
+            "S2": "S2_BB_MEAN_REV",
+            "S3": "S3_ORB",
+            "S4": "S4_ARBITRAGE",
+            "S6": "S6_TREND_SHORT",
+            "S6_VWAP": "S6_VWAP_BAND",
+            "S7": "S7_MEAN_REV_LONG",
+            "S8": "S8_VOL_PIVOT",
+            "S9": "S9_MTF_MOMENTUM",
+        }
+        _disabled = getattr(config, "DISABLED_STRATEGIES", set())
+
+        _all_scan_tasks = {
             "S1": lambda: self.scanner.scan_s1_ma_cross(self.regime),
             "S2": lambda: self.scanner.scan_s2_bb_mean_rev(self.regime),
             "S3": lambda: self.scanner.scan_s3_orb(self.regime),
-            "S4": lambda: self.scanner.scan_s4_arbitrage(), # Index futures arb
+            "S4": lambda: self.scanner.scan_s4_arbitrage(),
             "S6": lambda: self.scanner.scan_s6_trend_short(self.regime),
             "S6_VWAP": lambda: self.scanner.scan_s6_vwap_band(self.regime),
             "S7": lambda: self.scanner.scan_s7_mean_rev_long(self.regime),
             "S8": lambda: self.scanner.scan_s8_vol_pivot(self.regime),
-            "MACRO": lambda: self.macro.scan_news(self.regime)
+            "S9": lambda: self.scanner.scan_s9_mtf_momentum(self.regime),
         }
 
-        if "S9_MTF_MOMENTUM" not in getattr(config, "DISABLED_STRATEGIES", set()):
-            scan_tasks["S9"] = lambda: self.scanner.scan_s9_mtf_momentum(self.regime)
+        # Only run strategies NOT in DISABLED_STRATEGIES
+        scan_tasks = {
+            name: func for name, func in _all_scan_tasks.items()
+            if _strat_disable_map.get(name, name) not in _disabled
+        }
 
         futures_map = {
             self.scan_executor.submit(func): name 
@@ -467,6 +489,14 @@ class BNFEngine:
                 print(f"[Engine] {name} scan ERROR: {type(e).__name__}: {e}")
                 log_agent_action("ScannerAgent", f"{name}_ERROR", str(e)[:80])
 
+        # ── Drain MacroAgent confirmed signals (background thread) ──
+        if hasattr(self, "macro") and self.macro:
+            macro_signals = self.macro.drain_signals()
+            for sig in macro_signals:
+                sig["_strategy_group"] = "MACRO"
+                all_signals.append(sig)
+                log_agent_action("MacroAgent", "SIGNAL_INJECTED", f"{sig.get('symbol')} via {sig.get('strategy')} | {sig.get('headline','')[:40]}")
+
         # ── EXECUTE ALL VALID SIGNALS (Ranked by Relative Volume) ──
         # Protect against single-strategy correlation blowups
         all_signals.sort(key=lambda s: s.get('rvol', 0), reverse=True)
@@ -477,13 +507,37 @@ class BNFEngine:
             
             strat_group = sig.pop("_strategy_group", "")
             
-            # [Diversity Constraint] Check how many positions this strategy already controls
+            # ── [V19 60% WR Protocol] MacroAgent Veto Gate ──
+            # Before ANY technical trade reaches execution, check if the internet
+            # actively contradicts the trade direction.
+            if strat_group != "MACRO" and hasattr(self, 'macro') and self.macro:
+                is_long = not sig.get("is_short", False)
+                if self.macro.check_veto(sig.get("symbol", ""), is_long):
+                    log_agent_action("MacroAgent", "VETO_APPLIED", 
+                                     f"Blocked {sig.get('symbol')} {sig.get('strategy')} — news contradicts direction")
+                    continue  # Skip this trade entirely
+
+            # [Diversity Constraint] Dynamic Cluster Logic
+            # 1. Macro trades have NO cluster limit. News dictates all.
+            if strat_group == "MACRO":
+                max_allowed = 10
+            else:
+                rc = self.regime
+                if rc == "BULL":
+                    max_allowed = 8 if strat_group in ["S2", "S7", "S6_VWAP"] else 2
+                elif rc == "BEAR_PANIC":
+                    max_allowed = 10 if strat_group in ["S6", "S6_VWAP"] else 0
+                elif rc in ["CHOP", "EXTREME_PANIC"]:
+                    max_allowed = 2  # Defensive
+                else: # NORMAL / VOLATILE
+                    max_allowed = 5  # Standard
+
             same_strat_count = sum(
                 1 for p in self.execution.active_trades.values() 
                 if p.get("strategy", "").startswith(strat_group) or p.get("strategy", "").startswith(sig.get("strategy", ""))
             )
             
-            if same_strat_count >= getattr(config, "MAX_POSITIONS_PER_STRAT", 3):
+            if same_strat_count >= max_allowed:
                 continue
                 
             ok = self.execution.execute(sig, regime=self.regime)
@@ -555,6 +609,14 @@ class BNFEngine:
         from core.api_server import log_agent_action
         log_agent_action("Engine", "FULL_SHUTDOWN", "Tearing down all connections for overnight")
         print("[Engine] ═══ FULL SHUTDOWN — Tearing down all connections ═══")
+
+        # 0. Stop MacroAgent background news thread
+        if hasattr(self, "macro") and self.macro:
+            try:
+                self.macro.stop()
+                print("[Engine] MacroAgent stopped.")
+            except Exception:
+                pass
 
         # 1. Close WebSocket
         if self.ticker:
@@ -748,11 +810,43 @@ class BNFEngine:
         self.risk.engine_stopped = True
         self.risk.stop_reason = reason
 
+    def _start_macro_standalone(self):
+        """
+        Start the MacroAgent RSS news scanner independently of Kite/market.
+        MacroAgent is a pure HTTP RSS reader — it doesn't need tokens, ticks, or
+        any market infrastructure. It should run 24/7 so the dashboard always
+        shows live news headlines (weekends, holidays, after-hours, etc.).
+        """
+        try:
+            if hasattr(self, "macro") and self.macro and self.macro._running:
+                return  # Already running
+            from agents.macro_agent import MacroAgent
+            self.macro = MacroAgent(data_agent=self.data)  # data may be None, that's fine
+            self.macro.start()
+            print("[Engine] MacroAgent started standalone (RSS polling active 24/7)")
+        except Exception as e:
+            print(f"[Engine] MacroAgent standalone start failed: {e}")
+
     def run(self):
         from config import PAPER_MODE
         mode = "PAPER" if PAPER_MODE else "LIVE"
         print(f"[BNF Engine V19] Starting. Mode: {mode}. "
               f"Capital: Rs.{self.capital:,.0f}")
+
+        # Always start the API Server so Simulator and History work at night
+        print("[BNFEngine] Bootstrapping Dashboard API Server on port 8000...")
+        try:
+            from core.api_server import start_api_server
+            import threading
+            api_thread = threading.Thread(target=start_api_server, args=(self,), daemon=True)
+            api_thread.start()
+            import time
+            time.sleep(1.5)
+        except Exception as e:
+            print(f"[BNFEngine] Dashboard API failed to launch: {e}")
+
+        # Start MacroAgent immediately — it's a pure RSS reader, needs no Kite/ticks/market
+        self._start_macro_standalone()
 
         # ── MAIN DAILY LOOP — one full cycle per trading day ──
         while True:
@@ -771,10 +865,11 @@ class BNFEngine:
                 self._sleep_until_morning()
                 continue
 
-            # If launched manually after market hours, sleep immediately instead of popping up UI
+            # If launched manually after market hours, sleep immediately
             now_time = now_ist().time()
             if now_time >= datetime.time(16, 5):
                 print(f"[Engine] Launched after market hours ({now_time.strftime('%H:%M')}). Sleeping until tomorrow.")
+                self.regime = "OFFLINE"
                 self._sleep_until_morning()
                 continue
                 
@@ -821,6 +916,9 @@ class BNFEngine:
                     print("[Engine] Token is still valid.")
                     self._init_kite()
                     self.token_ok = True
+                    # Macro may have been recreated by _init_kite, ensure it's running
+                    if hasattr(self, "macro") and self.macro and not self.macro._running:
+                        self.macro.start()
                 except Exception as e:
                     print(f"[Engine] Token invalid/expired ({e}). Generating fresh token...")
                     self.auto_token_refresh()
@@ -829,19 +927,7 @@ class BNFEngine:
                 self.preload_cache()
                 self.pre_market()
 
-            print("[BNFEngine] Preparing Dashboard API Server for active session...")
-            try:
-                from core.api_server import start_api_server
-                import threading
-                api_thread = threading.Thread(target=start_api_server, args=(self,), daemon=True)
-                api_thread.start()
-                time.sleep(1.5)
-                
-                import webbrowser
-                print("[BNFEngine] Launching UI Dashboard in browser...")
-                webbrowser.open_new_tab("http://localhost:8000/")
-            except Exception as e:
-                print(f"[BNFEngine] Dashboard API failed to launch: {e}")
+
 
             print("[BNFEngine] Entering intraday execution loop...")
 

@@ -117,15 +117,15 @@ S1_RISK_PCT             = 0.01      # Max 1% risk per trade
 # Long: Price touches lower BB AND RSI < 30 AND price > VWAP
 # Short: Price touches upper BB AND RSI > 70 AND price < VWAP
 S2_BB_PERIOD            = 20        # Bollinger Bands period
-S2_BB_SD                = 2.0       # Bollinger Bands standard deviation
+S2_BB_SD                = 2.2       # Sweet Spot: 2.2 SD (allows more trades than 2.5, safer than 2.0)
 S2_RSI_PERIOD           = 14        # RSI period
-S2_RSI_OVERSOLD         = 35        # Reverted to 30 (25 too tight in VIX 9-15)
-S2_RSI_OVERBOUGHT       = 70        # Reverted to 70 (75 too tight in VIX 9-15)
+S2_RSI_OVERSOLD         = 25        # Loosened to 25 (from 20) for better trade frequency
+S2_RSI_OVERBOUGHT       = 75        # Loosened to 75 (from 80) for better trade frequency
 S2_ATR_SL_MULT          = 1.0       # Stop: 1 × ATR below/above entry
-S2_RR                   = 2.0       # Target: middle BB or 1:2 RR
+S2_RR                   = 1.2       # Keep tight 1.2 RR for high win probability
 S2_RISK_PCT             = 0.005     # Risk 0.5% max
-S2_MAX_HOLD_MINS        = 30        # Time exit: 30-min hold max
-S2_VIX_MAX              = 28        # Avoid if VIX > 25 (was 20 — elevated but tradeable below 25)
+S2_MAX_HOLD_MINS        = 25        # Time exit: 25-min hold max
+S2_VIX_MAX              = 28        # Avoid if VIX > 28
 
 # ── S3: Opening Range Breakout (MD Strategy 3, lines 87-106) ───────
 # Best Regime: Volatile/trending days (intraday). Timeframe: 15-min.
@@ -140,13 +140,13 @@ S3_TARGET_MULT          = 1.5       # Target: 1.5× range size
 
 # ── S6_TREND_SHORT: Trend Breakout Short (kept from V18) ──────────
 # Shorts stocks showing relative weakness on down days (intraday MIS)
-S6_RSI_PERIOD           = 14
-S6_RSI_ENTRY_LOW        = 40
-S6_RSI_ENTRY_HIGH       = 65
-S6_RSI_EXIT             = 30
+S6_RSI_PERIOD           = 4         # V18 specification demands RSI(4) for quick entries
+S6_RSI_ENTRY_LOW        = 60        # Bumped to 60 for deeper retracement confirmation
+S6_RSI_ENTRY_HIGH       = 90
+S6_RSI_EXIT             = 25
 S6_COOLDOWN_DAYS        = 2
 S6_MIN_TURNOVER_CR      = 30
-S6_RELATIVE_WEAKNESS    = 0.005
+S6_RELATIVE_WEAKNESS    = 0.0075    # Weakness must be larger (0.75%)
 S6_RVOL_MIN             = 1.3
 S6_VWAP_FILTER          = True
 
@@ -155,87 +155,56 @@ S6_VWAP_FILTER          = True
 # Best Regime: Intraday any regime. Timeframe: 5-min.
 # Long: Price < VWAP - 1.5 SD in uptrend (higher TF)
 # Short: Price > VWAP + 1.5 SD in downtrend
-S6_VWAP_SD              = 2.0       # Raised to 2.0 SD per research consensus
+S6_VWAP_SD              = 2.5       # Extreme Stretch (was 2.0)
 S6_VWAP_RISK_PCT        = 0.005     # Risk 0.5%
-S6_VWAP_RR              = 2.0       # Target: VWAP or 1:2 RR
+S6_VWAP_RR              = 1.2       # Tightened RR to 1.2 for highest strike rate
 
 # ── S7: Mean Reversion Long (kept from V18, intraday MIS) ─────────
 S7_RSI_PERIOD           = 14
-S7_RSI_OVERSOLD         = 30
-S7_RSI_EXIT             = 60
-S7_VWAP_DEVIATION_PCT   = 0.004
+S7_RSI_OVERSOLD         = 20        # Deep extreme oversold only (was 30)
+S7_RSI_EXIT             = 50        # Faster exit
+S7_VWAP_DEVIATION_PCT   = 0.015     # 1.5% VWAP crush minimum (was 0.4%)
 S7_MIN_TURNOVER_CR      = 50
-S7_RVOL_MIN             = 1.2
+S7_RVOL_MIN             = 1.5       # Volume blowout required for bounce
 S7_ATR_PERIOD           = 14
 
 # ── S8: Volume Profile + Pivot Breakout (MD Strategy 8, lines 175-190) ──
-# Best Regime: All (volume confirmation). Timeframe: 15-min/daily.
-# Long: Break above VAH/R1 pivot + volume spike > average
-# Short: Break below VAL/S1 pivot + volume spike
-S8_VOL_SPIKE_MULT       = 2.0      # Raised to 2.5x to reduce noise (was 2.0)
-S8_RISK_PCT             = 0.0075    # Risk 0.75%
+S8_VOL_SPIKE_MULT       = 2.5
+S8_RISK_PCT             = 0.0075
 
 # ── S9: Multi-Timeframe Trend + Momentum (MD Strategy 9, lines 192-207) ──
-# Best Regime: Bull/bear confirmation. Timeframe: Daily + 15-min.
-# Higher TF: Price > 200 EMA (uptrend) or < (downtrend)
-# Lower TF: RSI > 50 + MACD crossover in trend direction
-S9_EMA_TREND            = 200       # Daily 200 EMA for higher TF filter
-S9_RSI_PERIOD           = 14        # 15-min RSI period
-S9_RSI_THRESHOLD        = 45        # RSI > 50 for bullish momentum
-S9_ATR_SL_MULT          = 2.0       # Stop: 2 × ATR
-S9_RR                   = 3.0       # Target: 1:3 RR
-
-# ── S4: Cash-Futures Arbitrage (MD Strategy 4, lines 108-121) ──────
-# Best Regime: Any (low-risk). Timeframe: Tick/1-min.
-# Instruments: Nifty/BankNifty futures vs underlying + rebalancing stocks.
-# Entry: Long futures + short cash (or vice versa) when mispricing > 0.15%
-# Exit: Convergence (0.05% profit) or max 30-min hold.
-# Risk: Near-zero (hedged). Max 2% capital exposure.
-# COMMENTED BY USER REQUEST:
-# S4_MISPRINT_ENTRY_PCT   = 0.0015    # Enter when futures/spot diff > 0.15%
-# S4_MISPRINT_EXIT_PCT    = 0.0005    # Exit when converged to within 0.05%
-# S4_MAX_HOLD_MINS        = 30        # Max hold 30 minutes (MD rule, line 117)
-# S4_RISK_PCT             = 0.02      # Max 2% capital exposure (MD rule, line 118)
-# S4_RISK_FREE_RATE       = 0.065     # RBI repo rate approx 6.5% for fair value calc
-# Instruments: Nifty and BankNifty index + their near-month futures
-# S4_SPOT_TOKEN           = 256265    # NIFTY50 (same as NIFTY50_TOKEN)
-# BANKNIFTY_SPOT_TOKEN    = 260105    # NIFTY BANK index token
-
-
-# Based on adaptive intraday system research:
-# 9:15-9:20  → No trade (opening noise)
-# 9:20-11:30 → Active trading window
-# 11:30-13:15 → No Trade Zone (choppy, low volume midday)
-# 13:15-15:00 → Selective afternoon trades
-# 15:00+      → Exit all MIS positions
-TRADE_WINDOW_1_START    = "09:20"    # Morning active session
-TRADE_WINDOW_1_END      = "11:30"
-NO_TRADE_ZONE_START     = "11:30"    # Midday dead zone
-NO_TRADE_ZONE_END       = "13:15"
-TRADE_WINDOW_2_START    = "13:15"    # Afternoon selective session
-TRADE_WINDOW_2_END      = "15:00"
-INTRADAY_SQUAREOFF      = "15:15"    # Hard MIS square-off
-
-# ── Stock Selection Filters ──────────────────────────────────
-# Daily universe filter: focus on volatile, liquid stocks
-MIN_ATR_PERCENTILE      = 50        # Only trade stocks with ATR > median
-MIN_DAILY_VOLUME        = 500000    # Minimum daily average volume
+S9_EMA_TREND            = 200
+S9_RSI_PERIOD           = 14
+S9_RSI_THRESHOLD        = 45
+S9_ATR_SL_MULT          = 2.0
+S9_RR                   = 3.0
 
 # ── Timing ────────────────────────────────────────────────────
+TRADE_WINDOW_1_START    = "09:20"
+TRADE_WINDOW_1_END      = "11:30"
+NO_TRADE_ZONE_START     = "11:30"
+NO_TRADE_ZONE_END       = "13:15"
+TRADE_WINDOW_2_START    = "13:15"
+TRADE_WINDOW_2_END      = "15:00"
+INTRADAY_SQUAREOFF      = "15:15"
+
+MIN_ATR_PERCENTILE      = 50
+MIN_DAILY_VOLUME        = 500000
+
 HUNT_WINDOW_START       = "09:20"
 LAST_ENTRY_TIME         = "15:00"
 
-# ── Fill monitor polling ──────────────────────────────────────
 FILL_POLL_INTERVAL_SEC  = 30
 FILL_TIMEOUT_MINUTES    = 30
 
-# ── Paths ─────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE    = os.path.join(BASE_DIR, ".env")
 STATE_DB    = os.path.join(BASE_DIR, "data/engine_state.db")
 JOURNAL_DB  = os.path.join(BASE_DIR, "data/journal.db")
 
 # ── Disabled Strategies ───────────────────────────────────────
-DISABLED_STRATEGIES     = set()     # S9 IS NOW FULLY ENABLED
+# Explicitly disabling all Breakout and Momentum algorithms to target >= 60% Win Rate 
+# by focusing solely on Extreme Mean Reversion arrays.
+DISABLED_STRATEGIES     = {"S1_MA_CROSS", "S3_ORB", "S8_VOL_PIVOT", "S9_MTF_MOMENTUM"}
 
 

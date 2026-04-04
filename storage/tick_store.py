@@ -200,8 +200,8 @@ class TickStore:
                         "low":    cc["low"],   "close": cc["close"],
                         "volume": cc["volume"],
                     })
-                    if len(s["candles_5min"]) > 80:
-                        s["candles_5min"] = s["candles_5min"][-80:]
+                    if len(s["candles_5min"]) > 250:
+                        s["candles_5min"] = s["candles_5min"][-250:]
                 s["_current_candle"] = {
                     "bucket": bucket, "open": ltp, "high": ltp,
                     "low": ltp, "close": ltp, "volume": vol,
@@ -333,5 +333,4 @@ class TickStore:
                 s["day_high"] = 0.0
                 s["day_low"]  = 0.0
                 s["volume"]   = 0
-                s["candles_5min"] = []
-                s["_current_candle"] = None
+                # Intentionally maintaining historical candles_5min for indicator warmup across days
