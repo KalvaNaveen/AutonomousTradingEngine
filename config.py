@@ -57,14 +57,14 @@ TOTAL_CAPITAL       = float(os.getenv("TRADING_CAPITAL", "500000"))
 # Active Trading Capital: Rs.4,00,000 (80%)
 # Buffer (Risk Reserve): Rs.1,00,000 (20%)
 MAX_RISK_PER_TRADE_PCT  = 0.005     # 0.50% per trade (was 0.5%) -- safer
-DAILY_LOSS_LIMIT_PCT    = 0.025     # 2.5% daily max loss (Raised from 1% to accommodate multiple concurrent positions resolving)
-MAX_CONSECUTIVE_LOSSES  = 8         # Allow more consecutive losses before circuit break
+DAILY_LOSS_LIMIT_PCT    = 0.015     # 2.5% daily max loss (Raised from 1% to accommodate multiple concurrent positions resolving)
+MAX_CONSECUTIVE_LOSSES  = 2      # Allow more consecutive losses before circuit break
 MAX_OPEN_POSITIONS      = 10        # Raised: trade as many as capital allows
 MAX_POSITIONS_PER_STRAT = 3         # Max diverse trades per individual strategy at one time
 MAX_POSITION_PCT        = 0.15      # Max 15% capital per single position
-MAX_TRADES_PER_DAY      = 999       # Effectively unlimited — capital is the only constraint
-EOD_SQUAREOFF_TIME      = "15:10"   # Primary squareoff (5 min buffer before Zerodha auto-sq)
-EOD_SQUAREOFF_FINAL     = "15:20"   # Emergency backup only
+MAX_TRADES_PER_DAY      = 25         # Effectively unlimited — capital is the only constraint
+EOD_SQUAREOFF_TIME      = "15:05"   # Primary squareoff (5 min buffer before Zerodha auto-sq)
+EOD_SQUAREOFF_FINAL     = "15:10"   # Emergency backup only
 
 # === PERFORMANCE & COST BUFFERS (V7) ===
 STT_BUFFER                  = 0.997     # ~0.1% brokerage + 0.025% STT sell-side + slippage safety
@@ -117,26 +117,26 @@ S1_RISK_PCT             = 0.01      # Max 1% risk per trade
 # Long: Price touches lower BB AND RSI < 30 AND price > VWAP
 # Short: Price touches upper BB AND RSI > 70 AND price < VWAP
 S2_BB_PERIOD            = 20        # Bollinger Bands period
-S2_BB_SD                = 2.2       # Sweet Spot: 2.2 SD (allows more trades than 2.5, safer than 2.0)
+S2_BB_SD                = 2.5       # Extreme Stretch: 2.5 SD required for statistical certainty
 S2_RSI_PERIOD           = 14        # RSI period
-S2_RSI_OVERSOLD         = 25        # Loosened to 25 (from 20) for better trade frequency
-S2_RSI_OVERBOUGHT       = 75        # Loosened to 75 (from 80) for better trade frequency
+S2_RSI_OVERSOLD         = 20        # Extreme flush: < 20 only
+S2_RSI_OVERBOUGHT       = 80        # Extreme euphoria: > 80 only
 S2_ATR_SL_MULT          = 1.0       # Stop: 1 × ATR below/above entry
-S2_RR                   = 1.2       # Keep tight 1.2 RR for high win probability
+S2_RR                   = 1.2       # Target: Take profits at 1.2 RR. Do not wait for 2.0.
 S2_RISK_PCT             = 0.005     # Risk 0.5% max
-S2_MAX_HOLD_MINS        = 25        # Time exit: 25-min hold max
-S2_VIX_MAX              = 28        # Avoid if VIX > 28
+S2_MAX_HOLD_MINS        = 20        # Time exit: 20-min hold max (quick reversion)
+S2_VIX_MAX              = 28        # Avoid if VIX > 28 (Extreme Panic chop)
 
 # ── S3: Opening Range Breakout (MD Strategy 3, lines 87-106) ───────
 # Best Regime: Volatile/trending days (intraday). Timeframe: 15-min.
 # Mark High/Low of 9:15-9:30 AM candle.
 # Long: First 15-min candle closes above range High + volume > average
 # Short: First 15-min candle closes below range Low + volume > average
-S3_RISK_PCT             = 0.0075    # Risk 0.75% max
+S3_RISK_PCT             = 0.005     # Risk 0.5% max
 S3_MAX_TRADES           = 2         # Max 2 trades/day
 S3_ENTRY_END            = "11:30"   # Tightened from 14:00 → 11:30
 S3_EXIT_TIME            = "15:20"   # Mandatory exit by 3:20 PM
-S3_TARGET_MULT          = 1.5       # Target: 1.5× range size
+S3_TARGET_MULT          = 1.0       # BRUTAL TIGHTENING: 1.0x range size.
 
 # ── S6_TREND_SHORT: Trend Breakout Short (kept from V18) ──────────
 # Shorts stocks showing relative weakness on down days (intraday MIS)
@@ -155,15 +155,15 @@ S6_VWAP_FILTER          = True
 # Best Regime: Intraday any regime. Timeframe: 5-min.
 # Long: Price < VWAP - 1.5 SD in uptrend (higher TF)
 # Short: Price > VWAP + 1.5 SD in downtrend
-S6_VWAP_SD              = 2.5       # Extreme Stretch (was 2.0)
+S6_VWAP_SD              = 2.5       # Extreme Stretch logic enforced (2.5 SD)
 S6_VWAP_RISK_PCT        = 0.005     # Risk 0.5%
-S6_VWAP_RR              = 1.2       # Tightened RR to 1.2 for highest strike rate
+S6_VWAP_RR              = 1.2       # High-probability tight scaling
 
 # ── S7: Mean Reversion Long (kept from V18, intraday MIS) ─────────
 S7_RSI_PERIOD           = 14
-S7_RSI_OVERSOLD         = 20        # Deep extreme oversold only (was 30)
-S7_RSI_EXIT             = 50        # Faster exit
-S7_VWAP_DEVIATION_PCT   = 0.015     # 1.5% VWAP crush minimum (was 0.4%)
+S7_RSI_OVERSOLD         = 20        # Deep extreme oversold only
+S7_RSI_EXIT             = 45        # Faster exit
+S7_VWAP_DEVIATION_PCT   = 0.020     # Minimum 2.0% divergence required from VWAP
 S7_MIN_TURNOVER_CR      = 50
 S7_RVOL_MIN             = 1.5       # Volume blowout required for bounce
 S7_ATR_PERIOD           = 14
@@ -180,19 +180,19 @@ S9_ATR_SL_MULT          = 2.0
 S9_RR                   = 3.0
 
 # ── Timing ────────────────────────────────────────────────────
-TRADE_WINDOW_1_START    = "09:20"
-TRADE_WINDOW_1_END      = "11:30"
-NO_TRADE_ZONE_START     = "11:30"
-NO_TRADE_ZONE_END       = "13:15"
-TRADE_WINDOW_2_START    = "13:15"
-TRADE_WINDOW_2_END      = "15:00"
-INTRADAY_SQUAREOFF      = "15:15"
+TRADE_WINDOW_1_START    = "09:45"
+TRADE_WINDOW_1_END      = "11:15"
+NO_TRADE_ZONE_START     = "11:15"
+NO_TRADE_ZONE_END       = "13:45"
+TRADE_WINDOW_2_START    = "13:45"
+TRADE_WINDOW_2_END      = "14:45"
+INTRADAY_SQUAREOFF      = "15:10"
 
 MIN_ATR_PERCENTILE      = 50
 MIN_DAILY_VOLUME        = 500000
 
-HUNT_WINDOW_START       = "09:20"
-LAST_ENTRY_TIME         = "15:00"
+HUNT_WINDOW_START       = "09:45"
+LAST_ENTRY_TIME         = "14:45"
 
 FILL_POLL_INTERVAL_SEC  = 30
 FILL_TIMEOUT_MINUTES    = 30
