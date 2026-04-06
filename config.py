@@ -58,7 +58,7 @@ TOTAL_CAPITAL       = float(os.getenv("TRADING_CAPITAL", "500000"))
 # Buffer (Risk Reserve): Rs.1,00,000 (20%)
 MAX_RISK_PER_TRADE_PCT  = 0.005     # 0.50% per trade (was 0.5%) -- safer
 DAILY_LOSS_LIMIT_PCT    = 0.015     # 2.5% daily max loss (Raised from 1% to accommodate multiple concurrent positions resolving)
-MAX_CONSECUTIVE_LOSSES  = 2      # Allow more consecutive losses before circuit break
+MAX_CONSECUTIVE_LOSSES  = 5      # Mean-reversion can lose 2-3 in a row in chop — 5 is a true circuit breaker
 MAX_OPEN_POSITIONS      = 10        # Raised: trade as many as capital allows
 MAX_POSITIONS_PER_STRAT = 3         # Max diverse trades per individual strategy at one time
 MAX_POSITION_PCT        = 0.15      # Max 15% capital per single position

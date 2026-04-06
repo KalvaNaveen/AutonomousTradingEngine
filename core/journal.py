@@ -165,7 +165,7 @@ class Journal:
         """
         with sqlite3.connect(JOURNAL_DB) as conn:
             rows = conn.execute("""
-                SELECT gross_pnl, strategy, regime, symbol
+                SELECT gross_pnl, strategy, regime, symbol, entry_price, full_exit_price, qty
                 FROM trades
                 WHERE date >= ? AND date <= ?
             """, (from_date, to_date)).fetchall()
@@ -174,7 +174,7 @@ class Journal:
             return {
                 "total": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
                 "gross_pnl": 0.0, "best_regime": "—", "worst_regime": "—",
-                "top5_symbols": [],
+                "top5_symbols": [], "est_charges": 0.0,
             }
 
         total      = len(rows)
@@ -182,17 +182,31 @@ class Journal:
         gross_pnl  = sum(r[0] for r in rows)
         win_rate   = wins / total * 100 if total > 0 else 0.0
 
-        # Regime PnL breakdown
+        total_charges = 0.0
         regime_pnl: dict = {}
-        for pnl, _strat, regime, _sym in rows:
+        for r in rows:
+            pnl, strat, regime, sym, ep, xp, qty = r
             regime_pnl[regime] = regime_pnl.get(regime, 0.0) + pnl
+            
+            is_short = "SHORT" in str(strat).upper()
+            if is_short:
+                buy_v, sell_v = xp * qty, ep * qty
+            else:
+                buy_v, sell_v = ep * qty, xp * qty
+            brok = min(buy_v * 0.0003, 20.0) + min(sell_v * 0.0003, 20.0)
+            stt = sell_v * 0.00025
+            txn = (buy_v + sell_v) * 0.0000297
+            sebi = (buy_v + sell_v) * 0.000001
+            stamp = buy_v * 0.00003
+            gst = (brok + txn + sebi) * 0.18
+            total_charges += (brok + stt + txn + sebi + stamp + gst)
+            
         best_regime  = max(regime_pnl, key=regime_pnl.get) if regime_pnl else "—"
         worst_regime = min(regime_pnl, key=regime_pnl.get) if regime_pnl else "—"
 
-        # Top 5 symbols by total PnL
         sym_pnl: dict = {}
-        for pnl, _strat, _regime, sym in rows:
-            sym_pnl[sym] = sym_pnl.get(sym, 0.0) + pnl
+        for r in rows:
+            sym_pnl[r[3]] = sym_pnl.get(r[3], 0.0) + r[0]
         top5 = sorted(sym_pnl.items(), key=lambda x: x[1], reverse=True)[:5]
 
         return {
@@ -201,6 +215,7 @@ class Journal:
             "losses":       total - wins,
             "win_rate":     round(win_rate, 1),
             "gross_pnl":    round(gross_pnl, 2),
+            "est_charges":  round(total_charges, 2),
             "best_regime":  best_regime,
             "worst_regime": worst_regime,
             "top5_symbols": top5,

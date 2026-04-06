@@ -221,5 +221,6 @@ class StateManager:
                 trade["token"]             = r["token"] or 0
             except (IndexError, KeyError):
                 pass
+            trade["is_short"] = "SHORT" in str(r["strategy"]).upper()
             trades.append(trade)
         return trades

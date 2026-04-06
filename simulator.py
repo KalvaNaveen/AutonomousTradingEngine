@@ -420,6 +420,12 @@ class MultiTimeframeSimulator:
             date_str = str(today_date)
             daily_trade_count = 0  # Reset per day
             
+            # V19.3: Persistent RiskAgent per day (mirrors live engine)
+            # Previously, a fresh RiskAgent was created per trade → open_positions
+            # was always empty → shares_by_free used the full capital every time.
+            from agents.risk_agent import RiskAgent
+            self._day_risk = RiskAgent(self.current_capital, self.live_data)
+            
             # 1. Setup morning regime & cache
             self.scanner.new_session(today_date)
             self._mock_cache_for_day(date_str, day_idx)
@@ -600,10 +606,8 @@ class MultiTimeframeSimulator:
                             # Check S6 guard specifically
                             if "S6" in sig["strategy"] and not self.scanner.can_s6v_trade(mock_dt):
                                 continue
-                            # Use EXACT same sizing as live engine
-                            from agents.risk_agent import RiskAgent
-                            risk_agent = RiskAgent(self.current_capital, self.live_data)
-                            qty_risk = risk_agent.calculate_position_size(
+                            # V19.3: Use persistent day RiskAgent (tracks open positions accurately)
+                            qty_risk = self._day_risk.calculate_position_size(
                                 sig["entry_price"], sig["stop_price"],
                                 regime=regime, strategy=sig["strategy"],
                                 symbol=sig["symbol"]
@@ -617,6 +621,14 @@ class MultiTimeframeSimulator:
                                 sig["stop_price"], sig["target_price"], qty_risk, ts_datetime,
                                 is_short=is_short_val, product="MIS"
                             )
+                            # Register in day RiskAgent so free margin is tracked accurately
+                            self._day_risk.register_open(oid, {
+                                "symbol":      sig["symbol"],
+                                "entry_price": sig["entry_price"],
+                                "qty":         qty_risk,
+                                "strategy":    sig["strategy"],
+                                "is_short":    is_short_val,
+                            })
                             total_executed += 1
                             daily_trade_count += 1
                             lbl = "Short" if is_short_val else "Long"
@@ -713,6 +725,9 @@ class MultiTimeframeSimulator:
         
         for oid in closed:
             del self.open_positions[oid]
+            # Deregister from day RiskAgent so free margin is released
+            if hasattr(self, '_day_risk') and oid in self._day_risk.open_positions:
+                self._day_risk.open_positions.pop(oid, None)
 
     def _close_all_end_of_sim(self):
         for pos in self.open_positions.values():
@@ -721,12 +736,36 @@ class MultiTimeframeSimulator:
         self.open_positions.clear()
 
     def _record_trade(self, pos, exit_p, pnl, exit_t, reason):
-        # ── Realistic Simulation Costs ──
-        # Slippage: 0.04% per side
-        # Brokerage: ₹40 flat round-trip
-        # STT: 0.025% on sell side (approx on exit_p)
-        turnover = (pos.entry_price + exit_p) * pos.qty
-        total_costs = (turnover * 0.0004) + 40.0 + (exit_p * pos.qty * 0.00025)
+        # ── Realistic Indian Equity Charges (Zerodha 2026) ──
+        if getattr(pos, "is_short", False):
+            buy_val, sell_val = exit_p * pos.qty, pos.entry_price * pos.qty
+        else:
+            buy_val, sell_val = pos.entry_price * pos.qty, exit_p * pos.qty
+            
+        product = getattr(pos, "product", "MIS")
+        txn_chg = (buy_val + sell_val) * 0.0000297
+        sebi = (buy_val + sell_val) * 0.000001
+
+        if product == "CNC":
+            brok = 0.0
+            stt = (buy_val + sell_val) * 0.001
+            stamp = buy_val * 0.00015
+            dp_charge = 15.93  # 13.50 + 18% GST (on sell only)
+            gst = (brok + txn_chg + sebi) * 0.18
+            
+            # Slippage on entry and exit
+            slippage = (buy_val + sell_val) * 0.0004
+            total_costs = brok + stt + txn_chg + sebi + stamp + gst + dp_charge + slippage
+        else:
+            brok = min(buy_val * 0.0003, 20.0) + min(sell_val * 0.0003, 20.0)
+            stt = sell_val * 0.00025
+            stamp = buy_val * 0.00003
+            gst = (brok + txn_chg + sebi) * 0.18
+            
+            # Slippage on entry and exit
+            slippage = (buy_val + sell_val) * 0.0004
+            total_costs = brok + stt + txn_chg + sebi + stamp + gst + slippage
+            
         pnl -= total_costs
 
         self.current_capital += pnl

@@ -53,6 +53,29 @@ def _wl(pnl: float) -> str:
     if pnl < 0: return "LOSS"
     return "FLAT"
 
+def _compute_trade_charges(trade: dict) -> float:
+    entry = trade.get("entry_price", trade.get("entry", 0))
+    exit_p = trade.get("full_exit_price", trade.get("exit", 0))
+    qty = trade.get("qty", 0)
+    if not entry or not exit_p or not qty:
+        return 0.0
+
+    is_short = "SHORT" in str(trade.get("strategy", "")).upper()
+    if is_short:
+        buy_val, sell_val = exit_p * qty, entry * qty
+    else:
+        buy_val, sell_val = entry * qty, exit_p * qty
+
+    # Assume MIS (Intraday) for standard engine reports
+    brok = min(buy_val * 0.0003, 20.0) + min(sell_val * 0.0003, 20.0)
+    stt = sell_val * 0.00025
+    txn_chg = (buy_val + sell_val) * 0.0000297
+    sebi = (buy_val + sell_val) * 0.000001
+    stamp = buy_val * 0.00003
+    gst = (brok + txn_chg + sebi) * 0.18
+            
+    return brok + stt + txn_chg + sebi + stamp + gst
+
 
 def _send_telegram_message(text: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
@@ -166,6 +189,7 @@ def build_daily_report(
         f"📅 *DAILY REPORT* : {date_str}\n"
         f"{_separator()}\n"
         f"{_emoji_pnl(pnl)} Net P&L: `{_fmt(pnl)}`\n"
+        f"💸 Est. Charges: `{_fmt(sum(_compute_trade_charges(t) for t in trades_today)) if trades_today else 'Rs.0'}`\n"
         f"📊 Day ROI: `{_pct(day_roi)}`\n\n"
         f"Trades: `{total}` ({wins}W / {losses}L)\n"
         f"🎯 Win Rate: `{wr:.1f}%`\n"
@@ -352,7 +376,11 @@ def _build_pdf_report(
     pdf.kv_row("Total Trades:", str(total))
     pdf.kv_row("Wins / Losses:", f"{len(wins)}W / {len(losses_list)}L")
     pdf.kv_row("Win Rate:", f"{wr:.1f}%", bold_val=True)
+    
+    total_charges = sum(_compute_trade_charges(t) for t in valid_trades)
+    
     pdf.kv_row("Net P&L:", f"{net_pnl:+,.0f}", bold_val=True)
+    pdf.kv_row("Est. Charges:", f"{total_charges:,.0f}")
     pdf.kv_row("Avg Win:", f"{avg_win:+,.0f}")
     pdf.kv_row("Avg Loss:", f"{avg_loss:+,.0f}")
     if max_dd > 0:
@@ -480,6 +508,7 @@ def build_weekly_report(
         f"{from_date} → {to_date}\n"
         f"{_separator()}\n\n"
         f"{_emoji_pnl(pnl)} Net P&L: `{_fmt(pnl)}`\n"
+        f"💸 Est. Charges: `{_fmt(period_stats.get('est_charges', 0.0))}`\n"
         f"Trades: `{total}` ({wins}W / {losses}L)\n"
         f"🎯 Win Rate: `{wr:.1f}%`\n\n"
         f"📎 Full PDF report attached below."
@@ -530,6 +559,7 @@ def build_monthly_report(
         f"{from_date} → {to_date}\n"
         f"{_separator()}\n\n"
         f"{_emoji_pnl(pnl)} Net P&L: `{_fmt(pnl)}`\n"
+        f"💸 Est. Charges: `{_fmt(period_stats.get('est_charges', 0.0))}`\n"
         f"Trades: `{total}` ({wins}W / {losses}L)\n"
         f"🎯 Win Rate: `{wr:.1f}%`\n\n"
         f"📎 Full PDF report attached below."
@@ -643,6 +673,9 @@ def _build_text_period_report(
     lines.append("")
     lines.append("💰 *P&L SUMMARY*")
     lines.append(f"{_emoji_pnl(pnl)} Net P&L: `{_fmt(pnl)}`")
+    
+    total_charges = period_stats.get("est_charges", 0.0)
+    lines.append(f"💸 Est. Charges: `{_fmt(total_charges)}`")
     lines.append(f"📊 ROI: `{_pct(roi)}`")
 
     lines.append("")

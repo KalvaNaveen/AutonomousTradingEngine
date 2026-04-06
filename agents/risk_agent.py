@@ -109,13 +109,16 @@ class RiskAgent:
         if len(self.open_positions) >= MAX_OPEN_POSITIONS:
             return False, f"MAX_{MAX_OPEN_POSITIONS}_POSITIONS"
 
-        # Capital availability check: ensure enough margin for new trade
-        deployed = sum(
-            p["entry_price"] * p["qty"]
+        # Capital availability check: use REAL MIS margin (not full LTP)
+        # MIS only blocks entry_price / leverage as margin per share
+        new_sym = signal.get("symbol", "")
+        new_leverage = self._get_mis_leverage(new_sym)
+        deployed_margin = sum(
+            (p["entry_price"] * p["qty"]) / self._get_mis_leverage(p.get("symbol", ""))
             for p in self.open_positions.values()
         )
-        estimated_trade_cost = signal["entry_price"] * 1  # minimum 1 share
-        if deployed + estimated_trade_cost > self.active_capital:
+        estimated_margin = signal["entry_price"] * 1 / new_leverage  # margin for 1 share
+        if deployed_margin + estimated_margin > self.active_capital:
             return False, "INSUFFICIENT_CAPITAL"
 
         if signal["symbol"] in [p["symbol"] for p in self.open_positions.values()]:
@@ -196,8 +199,9 @@ class RiskAgent:
                                 strategy: str = "",
                                 symbol: str = "") -> int:
         """
-        V19.2 — Per-strategy + regime scaling for capital protection.
-        Mean-reversion (S2/S6V/S7) get reduced size in chop.
+        V19.3 — MIS-aware position sizing.
+        Uses real MIS leverage to compute how many shares the margin can support,
+        while still respecting per-trade risk limits.
         """
         base_scale = {
             "BULL": 1.0, "NORMAL": 1.0, "VOLATILE": 0.75,
@@ -211,6 +215,9 @@ class RiskAgent:
             else:
                 base_scale *= 0.85
 
+        leverage = self._get_mis_leverage(symbol)
+
+        # ── Risk-based sizing (how many shares to risk MAX_RISK_PER_TRADE_PCT) ──
         risk_rs = (self.total_capital 
                    * MAX_RISK_PER_TRADE_PCT 
                    * base_scale 
@@ -220,13 +227,30 @@ class RiskAgent:
         if rps <= 0:
             return 0
 
-        shares = int(risk_rs / rps)
+        shares_by_risk = int(risk_rs / rps)
 
-        # Hard position cap with REAL MIS Leverage from Zerodha
-        leverage = self._get_mis_leverage(symbol)
-        cap = int((self.active_capital * MAX_POSITION_PCT * leverage) / (entry * 1.001))
+        # ── Margin-based cap: how many shares the MIS margin can actually support ──
+        # MIS margin per share = entry / leverage
+        # Max capital for this position = active_capital * MAX_POSITION_PCT
+        margin_per_share = entry / leverage
+        shares_by_margin = int((self.active_capital * MAX_POSITION_PCT) / (margin_per_share * 1.001))
+
+        # ── Available margin cap: don't exceed remaining free margin ──
+        deployed_margin = sum(
+            (p["entry_price"] * p["qty"]) / self._get_mis_leverage(p.get("symbol", ""))
+            for p in self.open_positions.values()
+        )
+        free_margin = max(self.active_capital - deployed_margin, 0)
+        shares_by_free = int(free_margin / (margin_per_share * 1.001))
+
+        qty = min(shares_by_risk, shares_by_margin, shares_by_free)
         
-        return min(shares, cap)
+        if qty <= 0:
+            return 0
+
+        print(f"[Risk] {symbol} sizing: risk={shares_by_risk}, margin_cap={shares_by_margin}, "
+              f"free_margin={shares_by_free}, leverage={leverage:.1f}x → qty={qty}")
+        return qty
 
     def _get_mis_leverage(self, symbol: str) -> float:
         """
@@ -284,9 +308,32 @@ class RiskAgent:
         # (set in monitor_positions when partial_filled detected).
         # Direction-aware P&L: shorts profit when price falls
         if pos.get("is_short", False):
-            final_leg_pnl = (pos["entry_price"] - exit_price) * pos["qty"]
+            gross_leg_pnl = (pos["entry_price"] - exit_price) * pos["qty"]
+            buy_val, sell_val = exit_price * pos["qty"], pos["entry_price"] * pos["qty"]
         else:
-            final_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
+            gross_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
+            buy_val, sell_val = pos["entry_price"] * pos["qty"], exit_price * pos["qty"]
+            
+        # Realistic Indian Equity Charges (Zerodha 2026)
+        product = pos.get("product", "MIS")
+        txn_chg = (buy_val + sell_val) * 0.0000297
+        sebi = (buy_val + sell_val) * 0.000001
+        
+        if product == "CNC":
+            brok = 0.0
+            stt = (buy_val + sell_val) * 0.001
+            stamp = buy_val * 0.00015
+            dp_charge = 15.93  # 13.50 + 18% GST (on sell only)
+            gst = (brok + txn_chg + sebi) * 0.18
+            charges = brok + stt + txn_chg + sebi + stamp + gst + dp_charge
+        else: # MIS (Intraday)
+            brok = min(buy_val * 0.0003, 20.0) + min(sell_val * 0.0003, 20.0)
+            stt = sell_val * 0.00025
+            stamp = buy_val * 0.00003
+            gst = (brok + txn_chg + sebi) * 0.18
+            charges = brok + stt + txn_chg + sebi + stamp + gst
+
+        final_leg_pnl = gross_leg_pnl - charges
         self.daily_pnl += final_leg_pnl
         self.weekly_pnl += final_leg_pnl
 
