@@ -41,7 +41,7 @@ _news_feed = deque(maxlen=100)
 active_connections: list[WebSocket] = []
 
 
-def log_news_headline(title: str, source: str, symbol: str = "", sentiment: str = "neutral"):
+def log_news_headline(title: str, source: str, symbol: str = "", sentiment: str = "neutral", link: str = "", image: str = ""):
     """Called by MacroAgent to push a real headline to the dashboard feed."""
     from config import now_ist
     _news_feed.appendleft({
@@ -50,6 +50,8 @@ def log_news_headline(title: str, source: str, symbol: str = "", sentiment: str 
         "source": source,
         "symbol": symbol,
         "sentiment": sentiment,  # 'bullish', 'bearish', 'neutral'
+        "link": link,
+        "image": image,
     })
 
 

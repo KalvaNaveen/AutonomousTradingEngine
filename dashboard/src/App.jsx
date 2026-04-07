@@ -397,66 +397,174 @@ function LiveFloor({ state, logEndRef }) {
 
 function NewsFeedFloor({ state }) {
   const feed = state.news_feed || [];
-  const sentimentColor = { bullish: 'var(--accent-green)', bearish: 'var(--accent-red)', neutral: 'var(--text-muted)' };
-  const sentimentBg = { bullish: 'rgba(0,208,156,0.06)', bearish: 'rgba(255,77,77,0.06)', neutral: 'transparent' };
-  const sentimentLabel = { bullish: 'BULL', bearish: 'BEAR', neutral: 'NEUTRAL' };
+  
+  const getGradient = (sentiment) => {
+    switch(sentiment) {
+      case 'bullish': return 'linear-gradient(135deg, rgba(0, 208, 156, 0.2) 0%, rgba(0, 208, 156, 0.05) 100%)';
+      case 'bearish': return 'linear-gradient(135deg, rgba(255, 77, 77, 0.2) 0%, rgba(255, 77, 77, 0.05) 100%)';
+      default: return 'linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%)';
+    }
+  };
+
+  const getBorderColor = (sentiment) => {
+    switch(sentiment) {
+      case 'bullish': return 'rgba(0, 208, 156, 0.4)';
+      case 'bearish': return 'rgba(255, 77, 77, 0.4)';
+      default: return 'rgba(255, 255, 255, 0.1)';
+    }
+  };
+
+  const getTextColor = (sentiment) => {
+    switch(sentiment) {
+      case 'bullish': return '#00d09c';
+      case 'bearish': return '#ff4d4d';
+      default: return '#a0aab5';
+    }
+  };
 
   return (
-    <div className="main-content animate-fade">
-      <div className="panel" style={{ padding: '16px 20px', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="main-content animate-fade" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div 
+        style={{ 
+          padding: '24px 32px', 
+          flexShrink: 0, 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          background: 'linear-gradient(90deg, rgba(16,20,24,0.8) 0%, rgba(26,32,38,0.8) 100%)',
+          backdropFilter: 'blur(12px)',
+          borderBottom: '1px solid rgba(255,255,255,0.05)',
+          zIndex: 10
+        }}
+      >
         <div>
-          <h3 className="stat-label">Market Intelligence Feed</h3>
-          <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '4px' }}>Real-time headlines from Economic Times, CNBC TV18, Livemint &amp; more, filtered &amp; sentiment-scored by the MacroAgent.</p>
+          <h3 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '800', letterSpacing: '-0.02em', color: '#fff' }}>
+            Live Market Intelligence
+          </h3>
+          <p style={{ margin: '6px 0 0 0', fontSize: '0.85rem', color: '#a0aab5', fontWeight: '500' }}>
+            Algorithmic sentiment scoring across CNBC, Mint, & ET
+          </p>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div className="stat-label">Headlines</div>
-          <div className="stat-value text-blue">{feed.length}</div>
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+             <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00d09c', boxShadow: '0 0 10px #00d09c', animation: 'pulse 2s infinite' }}></div>
+             <span style={{ fontSize: '0.8rem', fontWeight: '700', color: '#00d09c', letterSpacing: '0.05em' }}>LIVE</span>
+          </div>
+          <div style={{ textAlign: 'right', background: 'rgba(255,255,255,0.03)', padding: '8px 16px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: '#a0aab5', fontWeight: '800', letterSpacing: '0.05em' }}>Headlines Scanned</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: '700', color: '#fff', marginTop: '2px' }}>{feed.length}</div>
+          </div>
         </div>
       </div>
 
-      <div className="panel" style={{ flex: 1, padding: 0, overflow: 'hidden' }}>
-        <div className="table-container scrollable">
-          {feed.length === 0 ? (
-            <div style={{ padding: '60px', textAlign: 'center', opacity: 0.3 }}>
-              <div style={{ fontSize: '2rem', marginBottom: '12px' }}>📡</div>
-              <div>MacroAgent is scanning 5 RSS feeds every 5 seconds.</div>
-              <div style={{ fontSize: '0.8rem', marginTop: '8px' }}>News will appear here when headlines match your universe symbols.</div>
-            </div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: '50px' }}>TIME</th>
-                  <th style={{ width: '80px' }}>SIGNAL</th>
-                  <th style={{ width: '80px' }}>SYMBOL</th>
-                  <th>HEADLINE</th>
-                  <th style={{ width: '140px', textAlign: 'right' }}>SOURCE</th>
-                </tr>
-              </thead>
-              <tbody>
-                {feed.map((item, i) => (
-                  <tr key={i} style={{ background: sentimentBg[item.sentiment] }}>
-                    <td className="text-muted" style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{item.time}</td>
-                    <td>
-                      <span style={{
-                        padding: '3px 8px', borderRadius: '4px', fontSize: '0.65rem',
-                        fontWeight: 800, letterSpacing: '0.05em',
-                        color: sentimentColor[item.sentiment],
-                        border: `1px solid ${sentimentColor[item.sentiment]}`,
-                        opacity: 0.9
-                      }}>{sentimentLabel[item.sentiment]}</span>
-                    </td>
-                    <td style={{ fontWeight: 700, color: sentimentColor[item.sentiment], fontSize: '0.8rem' }}>
-                      {item.symbol || '—'}
-                    </td>
-                    <td style={{ fontSize: '0.85rem', lineHeight: 1.4 }}>{item.title}</td>
-                    <td style={{ textAlign: 'right', fontSize: '0.7rem', opacity: 0.5 }}>{item.source}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+      <div style={{ flex: 1, padding: '32px', overflowY: 'auto' }}>
+        {feed.length === 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', opacity: 0.5 }}>
+            <div style={{ fontSize: '3rem', marginBottom: '16px', filter: 'grayscale(1)' }}>📡</div>
+            <h4 style={{ fontSize: '1.2rem', margin: 0, color: '#fff' }}>Listening to the market...</h4>
+            <div style={{ fontSize: '0.9rem', marginTop: '8px', color: '#a0aab5' }}>Waiting for relevant news catalysts to cross the wire.</div>
+          </div>
+        ) : (
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', 
+            gap: '24px' 
+          }}>
+            {feed.map((item, i) => (
+              <a 
+                key={i} 
+                href={item.link || '#'} 
+                target={item.link ? "_blank" : "_self"}
+                rel="noopener noreferrer"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  padding: '24px',
+                  textDecoration: 'none',
+                  background: item.image 
+                              ? `linear-gradient(135deg, rgba(16,20,24,0.9) 0%, rgba(16,20,24,0.4) 100%), url(${item.image}) center/cover no-repeat`
+                              : getGradient(item.sentiment),
+                  backdropFilter: 'blur(16px)',
+                  borderRadius: '16px',
+                  border: `1px solid ${getBorderColor(item.sentiment)}`,
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+                  transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+                  cursor: item.link ? 'pointer' : 'default',
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}
+                onMouseOver={(e) => {
+                  if (item.link) {
+                    e.currentTarget.style.transform = 'translateY(-6px) scale(1.02)';
+                    e.currentTarget.style.boxShadow = `0 16px 40px rgba(0,0,0,0.2), 0 0 20px ${getBorderColor(item.sentiment)}`;
+                  }
+                }}
+                onMouseOut={(e) => {
+                  if (item.link) {
+                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                    e.currentTarget.style.boxShadow = '0 8px 32px rgba(0,0,0,0.1)';
+                  }
+                }}
+              >
+                
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '4px 10px', 
+                    borderRadius: '20px', 
+                    fontSize: '0.7rem',
+                    fontWeight: '800', 
+                    letterSpacing: '0.05em',
+                    color: getTextColor(item.sentiment),
+                    backgroundColor: 'rgba(0,0,0,0.2)',
+                    border: `1px solid ${getBorderColor(item.sentiment)}`
+                  }}>
+                    {item.sentiment === 'bullish' ? '🚀 BULLISH' : item.sentiment === 'bearish' ? '⚠️ BEARISH' : '👁️ NEUTRAL'}
+                  </div>
+                  
+                  {item.symbol && (
+                    <span style={{ 
+                      fontWeight: '800', 
+                      color: '#fff', 
+                      fontSize: '0.85rem',
+                      background: 'rgba(255,255,255,0.1)',
+                      padding: '4px 10px',
+                      borderRadius: '8px',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                    }}>
+                      {item.symbol}
+                    </span>
+                  )}
+                </div>
+                
+                <h4 style={{ 
+                  fontSize: '1.1rem', 
+                  fontWeight: '600',
+                  lineHeight: 1.5, 
+                  margin: '0 0 24px 0',
+                  color: '#ffffff',
+                  flex: 1,
+                  textShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                }}>
+                  {item.title}
+                </h4>
+                
+                <div style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  fontSize: '0.8rem', 
+                  color: '#a0aab5',
+                  borderTop: '1px solid rgba(255,255,255,0.1)',
+                  paddingTop: '16px'
+                }}>
+                  <span style={{ fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{item.source}</span>
+                  <span style={{ background: 'rgba(0,0,0,0.3)', padding: '4px 8px', borderRadius: '6px' }}>{item.time}</span>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

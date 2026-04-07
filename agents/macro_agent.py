@@ -206,7 +206,7 @@ class MacroAgent:
         # We will collect 'votes' per symbol to enforce >1 feed validation
         symbol_votes = {} # symbol -> {"bull": set(feed_urls), "bear": set(feed_urls), "titles": []}
 
-        for title, desc, link, source_url in raw_items:
+        for title, desc, link, source_url, image in raw_items:
             if link in self._seen_urls:
                 continue
             self._seen_urls.add(link)
@@ -245,14 +245,14 @@ class MacroAgent:
             if bull_score > 0 and bear_score == 0:
                 if matched_symbol:
                     self._sentiment_cache[matched_symbol] = {"bias": "BULLISH", "timestamp": time.time()}
-                log_news_headline(title, src_name, matched_symbol, "bullish")
+                log_news_headline(title, src_name, matched_symbol, "bullish", link, image)
             elif bear_score > 0 and bull_score == 0:
                 if matched_symbol:
                     self._sentiment_cache[matched_symbol] = {"bias": "BEARISH", "timestamp": time.time()}
-                log_news_headline(title, src_name, matched_symbol, "bearish")
+                log_news_headline(title, src_name, matched_symbol, "bearish", link, image)
             elif bull_score == 0 and bear_score == 0:
                 # No sentiment keywords — still show as neutral market news
-                log_news_headline(title, src_name, "", "neutral")
+                log_news_headline(title, src_name, "", "neutral", link, image)
 
         # ── Signal generation (only when universe + market data is live) ──
         for symbol, vote_data in symbol_votes.items():
@@ -459,15 +459,43 @@ class MacroAgent:
 
             root = ET.fromstring(resp.content)
             items = []
+            
+            import re
+            img_regex = re.compile(r'<img[^>]+src=["\'](.*?)["\']', re.IGNORECASE)
+            
             for item in root.findall('.//item'):
                 title_el = item.find('title')
                 link_el  = item.find('link')
                 desc_el  = item.find('description')
+                
                 title = title_el.text if title_el is not None and title_el.text else ""
                 link  = link_el.text  if link_el is not None and link_el.text else ""
                 desc  = desc_el.text  if desc_el is not None and desc_el.text else ""
+                
+                # Image extraction
+                image = ""
+                # 1. media:content
+                media = item.find('.//{http://search.yahoo.com/mrss/}content')
+                if media is not None and media.get('url'):
+                    image = media.get('url')
+                # 2. enclosure
+                if not image:
+                    enc = item.find('enclosure')
+                    if enc is not None and enc.get('url') and 'image' in enc.get('type', ''):
+                        image = enc.get('url')
+                # 3. regex on description
+                if not image and desc:
+                    m = img_regex.search(desc)
+                    if m:
+                        image = m.group(1)
+                
                 if title:
-                    items.append((title, desc, link, url))
+                    items.append((title, desc, link, url, image))
+            
+            # The XML typically lists newest first.
+            # We reverse it so the newest items are appended LAST,
+            # meaning they end up at index 0 of the appendleft deque.
+            items.reverse()
             return items
         except Exception:
             return []
