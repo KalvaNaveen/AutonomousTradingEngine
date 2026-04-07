@@ -678,6 +678,16 @@ class MultiTimeframeSimulator:
                 closed.append(oid)
                 continue
 
+            # Preemptive Loss Exit (mirrors live engine PREEMPTIVE_EXIT_TIME)
+            from config import PREEMPTIVE_EXIT_TIME
+            pe_h, pe_m = map(int, PREEMPTIVE_EXIT_TIME.split(":"))
+            if time_str >= f"{pe_h:02d}:{pe_m:02d}":
+                unrealised = (pos.entry_price - close) * pos.qty if pos.is_short else (close - pos.entry_price) * pos.qty
+                if unrealised < 0:
+                    self._record_trade(pos, close, unrealised, f"{date_str} {time_str}", "PREEMPTIVE_LOSS_EXIT")
+                    closed.append(oid)
+                    continue
+
             # Dynamic RSI Exits
             if pos.strategy in ["S6_TREND_SHORT", "S7_MEAN_REV_LONG"]:
                 cache_closes = self.live_data.daily_cache.get_closes(token)
@@ -736,36 +746,15 @@ class MultiTimeframeSimulator:
         self.open_positions.clear()
 
     def _record_trade(self, pos, exit_p, pnl, exit_t, reason):
-        # ── Realistic Indian Equity Charges (Zerodha 2026) ──
+        # ── Centralized Charge Calculation (Zerodha 2026) ──
+        from core.charges import compute_trade_charges
         if getattr(pos, "is_short", False):
             buy_val, sell_val = exit_p * pos.qty, pos.entry_price * pos.qty
         else:
             buy_val, sell_val = pos.entry_price * pos.qty, exit_p * pos.qty
-            
         product = getattr(pos, "product", "MIS")
-        txn_chg = (buy_val + sell_val) * 0.0000297
-        sebi = (buy_val + sell_val) * 0.000001
-
-        if product == "CNC":
-            brok = 0.0
-            stt = (buy_val + sell_val) * 0.001
-            stamp = buy_val * 0.00015
-            dp_charge = 15.93  # 13.50 + 18% GST (on sell only)
-            gst = (brok + txn_chg + sebi) * 0.18
-            
-            # Slippage on entry and exit
-            slippage = (buy_val + sell_val) * 0.0004
-            total_costs = brok + stt + txn_chg + sebi + stamp + gst + dp_charge + slippage
-        else:
-            brok = min(buy_val * 0.0003, 20.0) + min(sell_val * 0.0003, 20.0)
-            stt = sell_val * 0.00025
-            stamp = buy_val * 0.00003
-            gst = (brok + txn_chg + sebi) * 0.18
-            
-            # Slippage on entry and exit
-            slippage = (buy_val + sell_val) * 0.0004
-            total_costs = brok + stt + txn_chg + sebi + stamp + gst + slippage
-            
+        charges = compute_trade_charges(buy_val, sell_val, product, slippage_pct=0.0004)
+        total_costs = charges["total"]
         pnl -= total_costs
 
         self.current_capital += pnl

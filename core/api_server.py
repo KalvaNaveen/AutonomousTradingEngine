@@ -358,6 +358,62 @@ def get_history_logs(date_str: str):
     from core.journal import Journal
     return Journal().get_logs_for_date(date_str)
 
+@app.get("/api/analysis/{date_str}")
+def get_trade_analysis(date_str: str):
+    """Returns trade analysis for a given date."""
+    from core.journal import Journal
+    from agents.trade_analysis_agent import TradeAnalysisAgent, analyze_trade
+    journal = Journal()
+    trades = journal.get_all_trades_for_date(date_str)
+    if not trades:
+        return {"trades": [], "summary": {}}
+
+    # Get daily summary for regime context
+    summary = journal.get_daily_summary_for_date(date_str) or {}
+    regime = summary.get("regime", "UNKNOWN")
+    ctx = {"regime": regime, "vix": 0}
+
+    analyses = [analyze_trade(t, ctx) for t in trades]
+
+    result_trades = []
+    for a in analyses:
+        result_trades.append({
+            "symbol": a.symbol,
+            "strategy": a.strategy,
+            "pnl": a.pnl,
+            "is_win": a.is_win,
+            "is_loss": a.is_loss,
+            "grade": a.grade,
+            "risk_score": a.risk_score,
+            "entry_price": a.entry_price,
+            "exit_price": a.exit_price,
+            "qty": a.qty,
+            "exit_reason": a.exit_reason,
+            "positives": a.positives,
+            "negatives": a.negatives,
+            "fixes": a.fixes,
+        })
+
+    # Summary stats
+    losses = [a for a in analyses if a.is_loss]
+    wins = [a for a in analyses if a.is_win]
+    from collections import defaultdict
+    grades = defaultdict(int)
+    for a in analyses:
+        grades[a.grade] += 1
+
+    return {
+        "trades": result_trades,
+        "summary": {
+            "total": len(analyses),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(len(wins) / max(len(analyses), 1) * 100, 1),
+            "grades": dict(grades),
+            "regime": regime,
+        },
+    }
+
 @app.websocket("/api/ws/simulator")
 async def simulator_stream(websocket: WebSocket, days: int = 30, top: int = 50):
     await websocket.accept()

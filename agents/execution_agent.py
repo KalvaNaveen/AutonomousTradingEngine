@@ -45,6 +45,7 @@ class ExecutionAgent:
                 "qty":         trade["qty"],
                 "strategy":    trade["strategy"],
                 "is_short":    trade.get("is_short", False),
+                "product":     trade.get("product", "MIS"),
             })
         self.alert(
             f"*CRASH RECOVERY*\n"
@@ -206,6 +207,7 @@ class ExecutionAgent:
             "qty":         qty,
             "strategy":    signal["strategy"],
             "is_short":    is_short,
+            "product":     "MIS",
         })
 
         # Background thread: polls until entry fills, then places SL + target
@@ -281,14 +283,61 @@ class ExecutionAgent:
                 if self.fill_monitor.check_partial_exit_filled(trade, order_map):
                     trade["partial_filled"] = True
                     self.state.mark_partial_filled(oid, trade["remaining_qty"])
+                    
+                    # Book partial P&L
+                    partial_qty = trade.get("partial_qty", 0)
+                    partial_price = trade.get("partial_target") or trade.get("partial_target_1")
+                    if partial_qty > 0 and partial_price:
+                        is_short = trade.get("is_short", False)
+                        if is_short:
+                            pt_gross = (trade["entry_price"] - partial_price) * partial_qty
+                            buy_val, sell_val = partial_price * partial_qty, trade["entry_price"] * partial_qty
+                        else:
+                            pt_gross = (partial_price - trade["entry_price"]) * partial_qty
+                            buy_val, sell_val = trade["entry_price"] * partial_qty, partial_price * partial_qty
+                            
+                        from core.charges import compute_trade_charges
+                        charge_res = compute_trade_charges(buy_val, sell_val, trade.get("product", "MIS"))
+                        pt_pnl = pt_gross - charge_res["total"]
+                        
+                        trade["realised_pnl"] = pt_pnl
+                        if oid in self.risk.open_positions:
+                            self.risk.open_positions[oid]["realised_pnl"] = pt_pnl
+                            # CRITICAL: Update qty to remaining so close_position()
+                            # calculates final leg P&L only on shares still held.
+                            # Without this: close_position uses original qty → double-count.
+                            self.risk.open_positions[oid]["qty"] = trade["remaining_qty"]
+                        self.risk.daily_pnl += pt_pnl
+                        self.risk.weekly_pnl += pt_pnl
+                        self.alert(f"💰 *PARTIAL BOOKED* `{trade['symbol']}`\nLocked PnL: Rs.`{pt_pnl:.0f}`")
 
             # ── MIS EOD Square-off ──
-            from config import EOD_SQUAREOFF_TIME
+            from config import EOD_SQUAREOFF_TIME, PREEMPTIVE_EXIT_TIME
             sq_h, sq_m = map(int, EOD_SQUAREOFF_TIME.split(":"))
             if now.time() >= datetime.time(sq_h, sq_m):
                 self._force_exit(oid, trade, "MIS_EOD_SQUAREOFF")
                 continue
-                
+
+            # ── Preemptive Loss Exit (14:30) ──
+            # If trade is in loss after PREEMPTIVE_EXIT_TIME, exit immediately
+            # rather than waiting for 15:05 forced squareoff. Prevents the #1
+            # P&L killer: trades drifting to EOD with no momentum resolution.
+            pe_h, pe_m = map(int, PREEMPTIVE_EXIT_TIME.split(":"))
+            if now.time() >= datetime.time(pe_h, pe_m):
+                token = trade.get("token")
+                ltp = 0
+                if self.tick_store and token:
+                    ltp = self.tick_store.get_ltp(token)
+                if ltp > 0:
+                    is_short = trade.get("is_short", False)
+                    active_qty = trade.get("remaining_qty", trade.get("qty", 0))
+                    unrealised = ((trade["entry_price"] - ltp) * active_qty
+                                  if is_short
+                                  else (ltp - trade["entry_price"]) * active_qty)
+                    if unrealised < 0:
+                        self._force_exit(oid, trade, "PREEMPTIVE_LOSS_EXIT")
+                        continue
+
             # ── Dynamic Regime Shift Evacuation ──
             is_pos_short = trade.get("is_short", False)
             if current_regime:
@@ -358,7 +407,7 @@ class ExecutionAgent:
                     else self.kite.TRANSACTION_TYPE_SELL)
 
         try:
-            self.kite.place_order(
+            exit_oid = self.kite.place_order(
                 variety=self.kite.VARIETY_REGULAR,
                 exchange=self.kite.EXCHANGE_NSE,
                 tradingsymbol=trade["symbol"],
@@ -371,13 +420,27 @@ class ExecutionAgent:
             self.alert(f"FORCE EXIT FAILED: `{trade['symbol']}` -- {e}")
             return
 
-        # Estimate exit price from live tick (market order, so price is approximate)
-        token     = trade.get("token")
-        exit_est  = trade["entry_price"]  # safe fallback
-        if self.tick_store and token:
-            ltp = self.tick_store.get_ltp(token)
-            if ltp > 0:
-                exit_est = ltp
+        # Fetch actual exit price from the order, falling back to LTP if it fails
+        exit_est = 0.0
+        try:
+            import time
+            time.sleep(1) # Give Kite a moment to process the market order
+            orders = self.kite.orders()
+            for o in orders:
+                if str(o.get("order_id")) == str(exit_oid) and o.get("status") == "COMPLETE":
+                    exit_est = float(o.get("average_price", 0.0))
+                    break
+        except Exception as e:
+            print(f"[Exec] Failed to fetch exit average price for {exit_oid}: {e}")
+
+        if not exit_est:
+            # Estimate exit price from live tick (market order fallback)
+            token     = trade.get("token")
+            exit_est  = trade["entry_price"]  # safe fallback
+            if self.tick_store and token:
+                ltp = self.tick_store.get_ltp(token)
+                if ltp > 0:
+                    exit_est = ltp
 
         pnl = self.risk.close_position(oid, exit_est)
         self.state.close(oid)

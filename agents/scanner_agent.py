@@ -142,16 +142,17 @@ class ScannerAgent:
 
     def is_in_trade_window(self) -> bool:
         """
-        Returns True if within active trading windows.
-        Window 1: 09:20 – 11:30 (morning momentum)
-        No-Trade Zone: 11:30 – 13:15 (midday chop)
-        Window 2: 13:15 – 15:00 (afternoon selective)
-        MD Strategy 3 ORB uses its own window: 9:30 AM – 2:00 PM.
+        Returns True if within active trading windows (from config.py).
+        Window 1: 09:30 – 11:30 (morning momentum)
+        No-Trade Zone: 11:30 – 13:30 (midday chop)
+        Window 2: 13:30 – 14:30 (afternoon selective)
         """
         now = now_ist().time()
-        w1 = datetime.time(9, 20) <= now <= datetime.time(11, 30)
-        w2 = datetime.time(13, 15) <= now <= datetime.time(15, 0)
-        return w1 or w2
+        w1_start = datetime.time(*map(int, TRADE_WINDOW_1_START.split(":")))
+        w1_end   = datetime.time(*map(int, TRADE_WINDOW_1_END.split(":")))
+        w2_start = datetime.time(*map(int, TRADE_WINDOW_2_START.split(":")))
+        w2_end   = datetime.time(*map(int, TRADE_WINDOW_2_END.split(":")))
+        return (w1_start <= now <= w1_end) or (w2_start <= now <= w2_end)
 
     def _check_daily_trade_limit(self) -> bool:
         """Returns True if we can still trade today (< MAX_TRADES_PER_DAY)."""
@@ -181,7 +182,8 @@ class ScannerAgent:
             return False, "WEEKEND"
         if t < datetime.time(9, 20):
             return False, "BEFORE_MARKET"
-        if t >= datetime.time(15, 0):
+        last_entry = datetime.time(*map(int, LAST_ENTRY_TIME.split(":")))
+        if t >= last_entry:
             return False, "AFTER_LAST_ENTRY"
         return True, "OK"
 

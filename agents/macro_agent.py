@@ -99,7 +99,9 @@ STRONG_BEARISH = [
 
 # Minimum thresholds for price + volume confirmation
 MIN_PRICE_MOVE_PCT = 0.005    # Stock must have moved >=0.5% in news direction
+MAX_PRICE_MOVE_PCT = 0.030    # If stock already moved >3%, news is priced in — SKIP
 MIN_RVOL_CONFIRM   = 1.5      # Relative Volume must be >=1.5x average
+MAX_SL_PCT         = 0.015    # Hard max SL cap: 1.5% of entry for news trades
 POLL_INTERVAL_SEC  = 5        # Poll every 5 seconds (HTTP caching prevents waste)
 
 
@@ -303,6 +305,18 @@ class MacroAgent:
             # Bearish news but price isn't falling → discard
             return None
 
+        # ── FIX #3: News Already Priced-In Check ──────────────────
+        # If the stock has already moved >3% in the news direction,
+        # the catalyst is fully absorbed. Chasing at this point means
+        # buying the top / shorting the bottom after the institutional flow.
+        abs_move = abs(price_change_pct)
+        if abs_move > MAX_PRICE_MOVE_PCT:
+            print(f"[MacroAgent] {symbol} already moved {abs_move*100:.1f}% — news priced in, SKIP")
+            from core.api_server import log_agent_action
+            log_agent_action("MacroAgent", "PRICED_IN_SKIP",
+                             f"{symbol} moved {abs_move*100:.1f}% > {MAX_PRICE_MOVE_PCT*100:.0f}% cap")
+            return None
+
         # Volume confirmation
         rvol = self.data.compute_rvol(token)
         if rvol < MIN_RVOL_CONFIRM:
@@ -314,11 +328,18 @@ class MacroAgent:
         if atr <= 0:
             atr = current * 0.02
 
+        # ── FIX #4: Tighter Stops for News Trades ────────────────
+        # News events create volatile two-way whipsaws. Use ATR-based stops
+        # but cap at MAX_SL_PCT (1.5%) of entry price to prevent oversized losses.
+        atr_stop = atr * 0.5
+        max_stop = current * MAX_SL_PCT
+        actual_stop_distance = min(atr_stop, max_stop)
+
         if is_short:
-            stop   = round(current + atr * 0.5, 2)
+            stop   = round(current + actual_stop_distance, 2)
             target = round(current - atr * 2.0, 2)
         else:
-            stop   = round(current - atr * 0.5, 2)
+            stop   = round(current - actual_stop_distance, 2)
             target = round(current + atr * 2.0, 2)
 
         return {
@@ -339,20 +360,44 @@ class MacroAgent:
 
     # ── Veto API for ScannerAgent ────────────────────────────────
     
-    def check_veto(self, symbol: str, is_long: bool) -> bool:
+    def check_veto(self, symbol: str, is_long: bool, regime: str = "NORMAL") -> bool:
         """
-        [V19 The 60% WR Protocol]
-        If the ScannerAgent wants to go Long, but the internet sees a massive BEARISH 
-        news headline for the stock within the last 4 hours, this returns True (VETO the trade).
+        [V19 The 60% WR Protocol — Enhanced]
+        Two-tier veto system:
+
+        Tier 1 (ALL regimes): If the internet actively CONTRADICTS the trade direction
+                              (e.g., going long on a stock with recent bearish headlines),
+                              VETO the trade.
+
+        Tier 2 (VOLATILE/CHOP/BEAR_PANIC): If sentiment is NEUTRAL (no recent news),
+                but the regime is uncertain, VETO technical trades that lack confirming
+                macro support. In unstable markets, "no news is bad news" — the absence
+                of positive sentiment increases the probability of adverse moves.
         """
         cache = getattr(self, '_sentiment_cache', {}).get(symbol)
+
+        # ── FIX #1: Aggressive Veto in Volatile Regimes ──────────
+        # In uncertain regimes, require ACTIVE confirming sentiment.
+        # If no sentiment exists at all, veto the trade.
+        aggressive_regimes = {"VOLATILE", "CHOP", "BEAR_PANIC", "EXTREME_PANIC"}
+        if regime in aggressive_regimes:
+            if not cache:
+                # No news at all for this symbol in an unstable market — risky
+                print(f"[MacroVeto] Blocked {symbol} in {regime}: No confirming sentiment available.")
+                return True
+            elapsed_hours = (time.time() - cache["timestamp"]) / 3600.0
+            if elapsed_hours > 2.0:
+                # Sentiment is stale (>2h) in a volatile market — unreliable
+                print(f"[MacroVeto] Blocked {symbol} in {regime}: Sentiment stale ({elapsed_hours:.1f}h ago).")
+                return True
+
         if not cache:
             return False
-            
+
         elapsed_hours = (time.time() - cache["timestamp"]) / 3600.0
         if elapsed_hours > 4.0:
             return False  # News is stale, let technicals ride
-            
+
         bias = cache["bias"]
         if is_long and bias == "BEARISH":
             print(f"[MacroVeto] Blocked Long on {symbol}: Negative sentiment active.")
@@ -360,7 +405,7 @@ class MacroAgent:
         if not is_long and bias == "BULLISH":
             print(f"[MacroVeto] Blocked Short on {symbol}: Positive sentiment active.")
             return True
-            
+
         return False
 
     # ── Public API for main.py ─────────────────────────────────

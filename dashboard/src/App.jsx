@@ -462,6 +462,186 @@ function NewsFeedFloor({ state }) {
   );
 }
 
+function AnalysisFloor() {
+  const [dates, setDates] = useState([]);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [analysis, setAnalysis] = useState(null);
+  const [expandedIdx, setExpandedIdx] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/history/dates').then(r => r.json()).then(data => {
+      setDates(data);
+      if (data.length > 0) setSelectedDate(data[0]);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedDate) return;
+    setLoading(true);
+    fetch(`/api/analysis/${selectedDate}`)
+      .then(r => r.json())
+      .then(data => { setAnalysis(data); setLoading(false); setExpandedIdx(null); })
+      .catch(() => setLoading(false));
+  }, [selectedDate]);
+
+  const gradeColor = (g) => {
+    const colors = { A: '#00D09C', B: '#7FD99C', C: '#FFB319', D: '#FF8C42', F: '#FF4D4D' };
+    return colors[g] || '#7b7b7b';
+  };
+
+  const gradeBg = (g) => {
+    const bgs = { A: 'rgba(0,208,156,0.12)', B: 'rgba(127,217,156,0.1)', C: 'rgba(255,179,25,0.1)', D: 'rgba(255,140,66,0.1)', F: 'rgba(255,77,77,0.1)' };
+    return bgs[g] || 'transparent';
+  };
+
+  const trades = analysis?.trades || [];
+  const summary = analysis?.summary || {};
+  const lossTrades = trades.filter(t => t.is_loss).sort((a, b) => a.pnl - b.pnl);
+  const winTrades = trades.filter(t => t.is_win).sort((a, b) => b.pnl - a.pnl);
+
+  return (
+    <div className="main-content animate-fade">
+      <div className="groww-panel" style={{ flexDirection: 'row', gap: '20px', alignItems: 'center', flexShrink: 0, padding: '14px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>TRADE ANALYSIS</h3>
+          <TradeCalendar dates={dates} selectedDate={selectedDate} onSelect={setSelectedDate} />
+        </div>
+        {summary.total > 0 && (
+          <div style={{ display: 'flex', gap: '28px', marginLeft: 'auto', alignItems: 'center' }}>
+            <div className="flex-col" style={{ gap: '2px' }}>
+              <div className="stat-label" style={{ fontSize: '0.65rem' }}>TRADES</div>
+              <div className="text-blue" style={{ fontWeight: 700 }}>{summary.total}</div>
+            </div>
+            <div className="flex-col" style={{ gap: '2px' }}>
+              <div className="stat-label" style={{ fontSize: '0.65rem' }}>WIN RATE</div>
+              <div style={{ fontWeight: 700, color: summary.win_rate >= 50 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{summary.win_rate}%</div>
+            </div>
+            <div className="flex-col" style={{ gap: '2px' }}>
+              <div className="stat-label" style={{ fontSize: '0.65rem' }}>GRADES</div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {summary.grades && Object.entries(summary.grades).sort().map(([g, c]) => (
+                  <span key={g} style={{ fontWeight: 800, fontSize: '0.8rem', color: gradeColor(g), background: gradeBg(g), padding: '2px 8px', borderRadius: '4px' }}>{g}:{c}</span>
+                ))}
+              </div>
+            </div>
+            <div className="flex-col" style={{ gap: '2px', alignItems: 'flex-end' }}>
+              <div className="stat-label" style={{ fontSize: '0.65rem' }}>REGIME</div>
+              <div style={{ fontWeight: 700, color: 'var(--accent-purple)' }}>{summary.regime || '—'}</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="bottom-split" style={{ gap: '12px' }}>
+        {/* Loss Trades - Deep Analysis */}
+        <div className="panel" style={{ flex: 1.2, padding: 0 }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--accent-red)' }}>❌ LOSS ANALYSIS</h3>
+            <span className="text-muted" style={{ fontSize: '0.75rem' }}>{lossTrades.length} trades</span>
+          </div>
+          <div className="scrollable" style={{ padding: '12px 16px', flex: 1 }}>
+            {loading && <div style={{ padding: 40, textAlign: 'center', opacity: 0.4 }}>Analyzing trades...</div>}
+            {!loading && lossTrades.length === 0 && <div style={{ padding: 40, textAlign: 'center', opacity: 0.3 }}>{selectedDate ? 'No loss trades found' : 'Select a date'}</div>}
+            {!loading && lossTrades.map((t, i) => {
+              const isExpanded = expandedIdx === `L${i}`;
+              const direction = t.strategy?.includes('SHORT') ? 'SHORT' : 'LONG';
+              return (
+                <div key={`L${i}`} style={{ marginBottom: '10px', borderRadius: '8px', border: '1px solid rgba(255,77,77,0.2)', background: 'rgba(255,77,77,0.04)', overflow: 'hidden' }}>
+                  <div
+                    onClick={() => setExpandedIdx(isExpanded ? null : `L${i}`)}
+                    style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ fontWeight: 800, fontSize: '0.95rem', color: gradeColor(t.grade), background: gradeBg(t.grade), padding: '4px 10px', borderRadius: '6px', minWidth: '32px', textAlign: 'center' }}>{t.grade}</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{t.symbol}</div>
+                        <div style={{ fontSize: '0.7rem', opacity: 0.6 }}>{t.strategy} ({direction})</div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="text-red" style={{ fontWeight: 700 }}>₹{t.pnl?.toFixed(0)}</div>
+                      <div style={{ fontSize: '0.7rem', opacity: 0.6 }}>{t.exit_reason}</div>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div style={{ padding: '0 16px 16px', borderTop: '1px solid rgba(255,77,77,0.1)' }}>
+                      <div style={{ display: 'flex', gap: '20px', padding: '12px 0 8px', fontSize: '0.8rem' }}>
+                        <span>Entry: <span className="text-blue" style={{ fontWeight: 600 }}>{t.entry_price?.toFixed(1)}</span></span>
+                        <span>Exit: <span style={{ fontWeight: 600 }}>{t.exit_price?.toFixed(1)}</span></span>
+                        <span>Qty: <span style={{ fontWeight: 600 }}>{t.qty}</span></span>
+                      </div>
+                      {t.negatives?.length > 0 && (
+                        <div style={{ margin: '8px 0' }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.75rem', color: 'var(--accent-red)', marginBottom: '4px' }}>⚠️ ISSUES</div>
+                          {t.negatives.map((n, j) => <div key={j} style={{ fontSize: '0.8rem', padding: '3px 0 3px 12px', opacity: 0.85 }}>• {n}</div>)}
+                        </div>
+                      )}
+                      {t.fixes?.length > 0 && (
+                        <div style={{ margin: '8px 0' }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.75rem', color: 'var(--accent-yellow)', marginBottom: '4px' }}>🔧 FIXES</div>
+                          {t.fixes.map((f, j) => <div key={j} style={{ fontSize: '0.8rem', padding: '3px 0 3px 12px', opacity: 0.85 }}>→ {f}</div>)}
+                        </div>
+                      )}
+                      {t.positives?.length > 0 && (
+                        <div style={{ margin: '8px 0' }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.75rem', color: 'var(--accent-green)', marginBottom: '4px' }}>✅ POSITIVES</div>
+                          {t.positives.map((p, j) => <div key={j} style={{ fontSize: '0.8rem', padding: '3px 0 3px 12px', opacity: 0.85 }}>• {p}</div>)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Win Trades - Summary */}
+        <div className="panel" style={{ flex: 0.8, padding: 0 }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--accent-green)' }}>✅ WIN ANALYSIS</h3>
+            <span className="text-muted" style={{ fontSize: '0.75rem' }}>{winTrades.length} trades</span>
+          </div>
+          <div className="scrollable" style={{ padding: '12px 16px', flex: 1 }}>
+            {!loading && winTrades.length === 0 && <div style={{ padding: 40, textAlign: 'center', opacity: 0.3 }}>No winning trades</div>}
+            {!loading && winTrades.map((t, i) => {
+              const isExpanded = expandedIdx === `W${i}`;
+              return (
+                <div key={`W${i}`} style={{ marginBottom: '10px', borderRadius: '8px', border: '1px solid rgba(0,208,156,0.2)', background: 'rgba(0,208,156,0.04)', overflow: 'hidden' }}>
+                  <div
+                    onClick={() => setExpandedIdx(isExpanded ? null : `W${i}`)}
+                    style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ fontWeight: 800, fontSize: '0.95rem', color: gradeColor(t.grade), background: gradeBg(t.grade), padding: '4px 10px', borderRadius: '6px', minWidth: '32px', textAlign: 'center' }}>{t.grade}</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{t.symbol}</div>
+                        <div style={{ fontSize: '0.7rem', opacity: 0.6 }}>{t.strategy}</div>
+                      </div>
+                    </div>
+                    <div className="text-green" style={{ fontWeight: 700 }}>+₹{t.pnl?.toFixed(0)}</div>
+                  </div>
+                  {isExpanded && (
+                    <div style={{ padding: '0 16px 16px', borderTop: '1px solid rgba(0,208,156,0.1)' }}>
+                      {t.positives?.length > 0 && t.positives.map((p, j) => (
+                        <div key={j} style={{ fontSize: '0.8rem', padding: '8px 0 3px 0', opacity: 0.85 }}>✅ {p}</div>
+                      ))}
+                      {t.negatives?.length > 0 && t.negatives.map((n, j) => (
+                        <div key={j} style={{ fontSize: '0.8rem', padding: '3px 0 3px 0', opacity: 0.7 }}>⚠️ {n}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('live');
   const [state, setState] = useState({
@@ -580,6 +760,7 @@ function App() {
           <button className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>JOURNAL</button>
           <button className={`tab-btn ${activeTab === 'simulator' ? 'active' : ''}`} onClick={() => setActiveTab('simulator')}>QUANT SIM</button>
           <button className={`tab-btn ${activeTab === 'news' ? 'active' : ''}`} onClick={() => setActiveTab('news')}>NEWS FEED</button>
+          <button className={`tab-btn ${activeTab === 'analysis' ? 'active' : ''}`} onClick={() => setActiveTab('analysis')}>ANALYSIS</button>
           
           <div className="ticker-wrap" style={{marginLeft:'auto', display:'flex', alignItems:'center', gap:'20px', paddingLeft: '40px'}}>
              <div className="ticker-item"><span className="stat-label">NIFTY 50</span> <span className={state.index_data?.nifty50 ? 'text-green' : 'text-muted'} style={{fontWeight:800}}>{state.index_data?.nifty50 ? state.index_data.nifty50.toLocaleString('en-IN') : '—'}</span></div>
@@ -599,6 +780,9 @@ function App() {
         </div>
         <div style={{ display: activeTab === 'news' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
           <NewsFeedFloor state={state} />
+        </div>
+        <div style={{ display: activeTab === 'analysis' ? 'contents' : 'none' }}>
+          <AnalysisFloor />
         </div>
       </div>
     </>

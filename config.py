@@ -57,7 +57,7 @@ TOTAL_CAPITAL       = float(os.getenv("TRADING_CAPITAL", "500000"))
 # Active Trading Capital: Rs.4,00,000 (80%)
 # Buffer (Risk Reserve): Rs.1,00,000 (20%)
 MAX_RISK_PER_TRADE_PCT  = 0.005     # 0.50% per trade (was 0.5%) -- safer
-DAILY_LOSS_LIMIT_PCT    = 0.015     # 2.5% daily max loss (Raised from 1% to accommodate multiple concurrent positions resolving)
+DAILY_LOSS_LIMIT_PCT    = 0.015     # 1.5% daily max loss of active capital
 MAX_CONSECUTIVE_LOSSES  = 5      # Mean-reversion can lose 2-3 in a row in chop — 5 is a true circuit breaker
 MAX_OPEN_POSITIONS      = 10        # Raised: trade as many as capital allows
 MAX_POSITIONS_PER_STRAT = 3         # Max diverse trades per individual strategy at one time
@@ -65,6 +65,7 @@ MAX_POSITION_PCT        = 0.15      # Max 15% capital per single position
 MAX_TRADES_PER_DAY      = 25         # Effectively unlimited — capital is the only constraint
 EOD_SQUAREOFF_TIME      = "15:05"   # Primary squareoff (5 min buffer before Zerodha auto-sq)
 EOD_SQUAREOFF_FINAL     = "15:10"   # Emergency backup only
+PREEMPTIVE_EXIT_TIME    = "14:30"   # Force-exit losing trades at 14:30 to avoid EOD drain
 
 # === PERFORMANCE & COST BUFFERS (V7) ===
 STT_BUFFER                  = 0.997     # ~0.1% brokerage + 0.025% STT sell-side + slippage safety
@@ -180,19 +181,19 @@ S9_ATR_SL_MULT          = 2.0
 S9_RR                   = 3.0
 
 # ── Timing ────────────────────────────────────────────────────
-TRADE_WINDOW_1_START    = "09:45"
-TRADE_WINDOW_1_END      = "11:15"
-NO_TRADE_ZONE_START     = "11:15"
-NO_TRADE_ZONE_END       = "13:45"
-TRADE_WINDOW_2_START    = "13:45"
-TRADE_WINDOW_2_END      = "14:45"
+TRADE_WINDOW_1_START    = "09:30"
+TRADE_WINDOW_1_END      = "11:30"
+NO_TRADE_ZONE_START     = "11:30"
+NO_TRADE_ZONE_END       = "13:30"
+TRADE_WINDOW_2_START    = "13:30"
+TRADE_WINDOW_2_END      = "14:30"
 INTRADAY_SQUAREOFF      = "15:10"
 
 MIN_ATR_PERCENTILE      = 50
 MIN_DAILY_VOLUME        = 500000
 
-HUNT_WINDOW_START       = "09:45"
-LAST_ENTRY_TIME         = "14:45"
+HUNT_WINDOW_START       = "09:30"
+LAST_ENTRY_TIME         = "14:30"
 
 FILL_POLL_INTERVAL_SEC  = 30
 FILL_TIMEOUT_MINUTES    = 30

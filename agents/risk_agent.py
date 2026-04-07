@@ -145,10 +145,17 @@ class RiskAgent:
         # ── RR CALCULATION ──
         rr = reward / risk if risk > 0 else 0
         
-        # Special strict rule for weakest strategy (S3)
+        # Strategy-aware RR minimums:
+        # Mean-reversion strategies (S2, S6_VWAP, S7) are HIGH WIN RATE but LOW R:R by design.
+        # They profit through frequency and consistency, not large individual wins.
+        # Trend/momentum strategies need higher R:R to compensate for lower win rate.
+        mean_rev_strategies = {"S2_BB_MEAN_REV", "S6_VWAP_BAND", "S7_MEAN_REV_LONG"}
         if strategy == "S3_ORB" and rr < 2.5:
             return False, f"S3_RR_{rr:.2f}_BELOW_2.5"
-        if rr < 2.0:
+        elif strategy in mean_rev_strategies:
+            if rr < 1.2:
+                return False, f"MR_RR_{rr:.2f}_BELOW_1.2"
+        elif rr < 2.0:
             return False, f"RR_{rr:.2f}_BELOW_2.0"
         return True, "APPROVED"
 
@@ -215,6 +222,18 @@ class RiskAgent:
             else:
                 base_scale *= 0.85
 
+        # ── FIX #2: Reduce position size for MACRO/news trades in uncertain regimes ──
+        # News events in volatile markets create two-way whipsaws.
+        # Scale down to avoid oversized losses when regime is ambiguous.
+        if strategy in ["S8_MACRO_LONG", "S8_MACRO_SHORT"]:
+            macro_regime_scale = {
+                "VOLATILE": 0.60,
+                "CHOP": 0.50,
+                "BEAR_PANIC": 0.50,
+                "EXTREME_PANIC": 0.30,
+            }.get(regime, 0.85)  # Even in NORMAL/BULL, cap at 85%
+            base_scale *= macro_regime_scale
+
         leverage = self._get_mis_leverage(symbol)
 
         # ── Risk-based sizing (how many shares to risk MAX_RISK_PER_TRADE_PCT) ──
@@ -235,6 +254,12 @@ class RiskAgent:
         margin_per_share = entry / leverage
         shares_by_margin = int((self.active_capital * MAX_POSITION_PCT) / (margin_per_share * 1.001))
 
+        # ── Notional exposure cap: limit actual stock value, not just margin ──
+        # With 5x MIS leverage, the margin cap allows 60%+ notional exposure.
+        # This ensures no single position exceeds MAX_POSITION_PCT of TOTAL capital.
+        max_notional = self.total_capital * MAX_POSITION_PCT
+        shares_by_notional = int(max_notional / (entry * 1.001))
+
         # ── Available margin cap: don't exceed remaining free margin ──
         deployed_margin = sum(
             (p["entry_price"] * p["qty"]) / self._get_mis_leverage(p.get("symbol", ""))
@@ -243,13 +268,13 @@ class RiskAgent:
         free_margin = max(self.active_capital - deployed_margin, 0)
         shares_by_free = int(free_margin / (margin_per_share * 1.001))
 
-        qty = min(shares_by_risk, shares_by_margin, shares_by_free)
+        qty = min(shares_by_risk, shares_by_margin, shares_by_notional, shares_by_free)
         
         if qty <= 0:
             return 0
 
-        print(f"[Risk] {symbol} sizing: risk={shares_by_risk}, margin_cap={shares_by_margin}, "
-              f"free_margin={shares_by_free}, leverage={leverage:.1f}x → qty={qty}")
+        print(f"[Risk] {symbol} sizing: risk={shares_by_risk}, margin={shares_by_margin}, "
+              f"notional={shares_by_notional}, free={shares_by_free}, lev={leverage:.1f}x → qty={qty}")
         return qty
 
     def _get_mis_leverage(self, symbol: str) -> float:
@@ -314,24 +339,11 @@ class RiskAgent:
             gross_leg_pnl = (exit_price - pos["entry_price"]) * pos["qty"]
             buy_val, sell_val = pos["entry_price"] * pos["qty"], exit_price * pos["qty"]
             
-        # Realistic Indian Equity Charges (Zerodha 2026)
+        # Centralized Charge Calculation (Zerodha 2026)
+        from core.charges import compute_trade_charges
         product = pos.get("product", "MIS")
-        txn_chg = (buy_val + sell_val) * 0.0000297
-        sebi = (buy_val + sell_val) * 0.000001
-        
-        if product == "CNC":
-            brok = 0.0
-            stt = (buy_val + sell_val) * 0.001
-            stamp = buy_val * 0.00015
-            dp_charge = 15.93  # 13.50 + 18% GST (on sell only)
-            gst = (brok + txn_chg + sebi) * 0.18
-            charges = brok + stt + txn_chg + sebi + stamp + gst + dp_charge
-        else: # MIS (Intraday)
-            brok = min(buy_val * 0.0003, 20.0) + min(sell_val * 0.0003, 20.0)
-            stt = sell_val * 0.00025
-            stamp = buy_val * 0.00003
-            gst = (brok + txn_chg + sebi) * 0.18
-            charges = brok + stt + txn_chg + sebi + stamp + gst
+        charge_result = compute_trade_charges(buy_val, sell_val, product)
+        charges = charge_result["total"]
 
         final_leg_pnl = gross_leg_pnl - charges
         self.daily_pnl += final_leg_pnl

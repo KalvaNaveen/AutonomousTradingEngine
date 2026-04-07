@@ -54,27 +54,8 @@ def _wl(pnl: float) -> str:
     return "FLAT"
 
 def _compute_trade_charges(trade: dict) -> float:
-    entry = trade.get("entry_price", trade.get("entry", 0))
-    exit_p = trade.get("full_exit_price", trade.get("exit", 0))
-    qty = trade.get("qty", 0)
-    if not entry or not exit_p or not qty:
-        return 0.0
-
-    is_short = "SHORT" in str(trade.get("strategy", "")).upper()
-    if is_short:
-        buy_val, sell_val = exit_p * qty, entry * qty
-    else:
-        buy_val, sell_val = entry * qty, exit_p * qty
-
-    # Assume MIS (Intraday) for standard engine reports
-    brok = min(buy_val * 0.0003, 20.0) + min(sell_val * 0.0003, 20.0)
-    stt = sell_val * 0.00025
-    txn_chg = (buy_val + sell_val) * 0.0000297
-    sebi = (buy_val + sell_val) * 0.000001
-    stamp = buy_val * 0.00003
-    gst = (brok + txn_chg + sebi) * 0.18
-            
-    return brok + stt + txn_chg + sebi + stamp + gst
+    from core.charges import compute_charges_from_trade
+    return compute_charges_from_trade(trade)
 
 
 def _send_telegram_message(text: str):

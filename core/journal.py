@@ -188,18 +188,15 @@ class Journal:
             pnl, strat, regime, sym, ep, xp, qty = r
             regime_pnl[regime] = regime_pnl.get(regime, 0.0) + pnl
             
+            # Centralized charge calculation (single source of truth)
+            from core.charges import compute_trade_charges
             is_short = "SHORT" in str(strat).upper()
             if is_short:
                 buy_v, sell_v = xp * qty, ep * qty
             else:
                 buy_v, sell_v = ep * qty, xp * qty
-            brok = min(buy_v * 0.0003, 20.0) + min(sell_v * 0.0003, 20.0)
-            stt = sell_v * 0.00025
-            txn = (buy_v + sell_v) * 0.0000297
-            sebi = (buy_v + sell_v) * 0.000001
-            stamp = buy_v * 0.00003
-            gst = (brok + txn + sebi) * 0.18
-            total_charges += (brok + stt + txn + sebi + stamp + gst)
+            charge_result = compute_trade_charges(buy_v, sell_v, "MIS")
+            total_charges += charge_result["total"]
             
         best_regime  = max(regime_pnl, key=regime_pnl.get) if regime_pnl else "—"
         worst_regime = min(regime_pnl, key=regime_pnl.get) if regime_pnl else "—"

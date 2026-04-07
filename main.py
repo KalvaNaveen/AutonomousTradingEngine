@@ -21,12 +21,13 @@ Startup sequence:
   8:30 AM  -> Auto token refresh (headless Zerodha login)
   8:45 AM  -> Blackout calendar refresh + daily cache preload (260d)
   9:00 AM  -> Crash recovery + regime detection
-  9:20 AM  -> Trading begins (Window 1: 9:20-11:30)
+  9:30 AM  -> Trading begins (Window 1: 9:30-11:30)
   Every 60s -> Tick: All 8 strategy scans + execute + monitor
   Every 15m -> Regime re-check
-  11:30-13:15 -> No Trade Zone (midday chop)
-  13:15 PM -> Trading resumes (Window 2: 13:15-15:00)
-  15:15 PM -> MIS Square-off
+  11:30-13:30 -> No Trade Zone (midday chop)
+  13:30 PM -> Trading resumes (Window 2: 13:30-14:30)
+  14:30 PM -> Preemptive loss exit (losing positions killed)
+  15:05 PM -> MIS Square-off
   15:30 PM -> Daily summary + journal
 """
 
@@ -507,14 +508,14 @@ class BNFEngine:
             
             strat_group = sig.pop("_strategy_group", "")
             
-            # ── [V19 60% WR Protocol] MacroAgent Veto Gate ──
-            # Before ANY technical trade reaches execution, check if the internet
-            # actively contradicts the trade direction.
+            # ── [V19 60% WR Protocol — Enhanced] MacroAgent Veto Gate ──
+            # Two-tier: (1) block contradicting news, (2) in volatile regimes,
+            # also block trades with no confirming sentiment.
             if strat_group != "MACRO" and hasattr(self, 'macro') and self.macro:
                 is_long = not sig.get("is_short", False)
-                if self.macro.check_veto(sig.get("symbol", ""), is_long):
+                if self.macro.check_veto(sig.get("symbol", ""), is_long, regime=self.regime):
                     log_agent_action("MacroAgent", "VETO_APPLIED", 
-                                     f"Blocked {sig.get('symbol')} {sig.get('strategy')} — news contradicts direction")
+                                     f"Blocked {sig.get('symbol')} {sig.get('strategy')} — news contradicts or no confirming sentiment in {self.regime}")
                     continue  # Skip this trade entirely
 
             # [Diversity Constraint] Dynamic Cluster Logic
@@ -575,19 +576,24 @@ class BNFEngine:
         )
         self.scan_count = 0
 
-        if PAPER_MODE and hasattr(self.kite, "get_paper_summary"):
-            s = self.kite.get_paper_summary()
-            self.execution.alert(
-                f"*PAPER SESSION SUMMARY*\n"
-                f"Round-trip Trades: `{s['trades_completed']}` | "
-                f"All Orders: `{s['total_orders']}` (incl. SL/target legs) | "
-                f"Fills: `{s['filled']}`\n"
-                f"Realised PnL: Rs.`{s['realised_pnl']:+,.2f}`\n"
-                f"Brokerage paid: Rs.`{s['total_brokerage']:,.2f}`\n"
-                f"Open Exposure: Rs.`{s['capital_deployed']:,.0f}` | "
-                f"Available: Rs.`{s['available_margin']:,.0f}`"
-            )
         self.execution.alert("*BNF Engine V19 -- MARKET CLOSED*")
+
+        # ── Trade Analysis Agent: Post-session deep-dive ──
+        try:
+            from agents.trade_analysis_agent import TradeAnalysisAgent
+            analyzer = TradeAnalysisAgent()
+            vix = 0
+            if self.tick_store:
+                from config import INDIA_VIX_TOKEN
+                vix = self.tick_store.get_ltp(INDIA_VIX_TOKEN) or 0
+            analyzer.run_daily_analysis(
+                regime=self.regime,
+                vix=vix,
+                alert_fn=self.execution.alert,
+            )
+            print("[Engine] Trade Analysis report sent.")
+        except Exception as e:
+            print(f"[Engine] Trade Analysis agent error: {e}")
 
     def stop_websocket(self):
         """Close the websocket connection after market hours."""
@@ -672,6 +678,14 @@ class BNFEngine:
             stop_api_server()
         except Exception as e:
             print(f"[Engine] Dashboard API shutdown error: {e}")
+
+        # 8. Terminate UI process if running
+        if hasattr(self, "ui_process") and self.ui_process:
+            try:
+                self.ui_process.terminate()
+                print("[Engine] Dashboard UI process terminated.")
+            except Exception:
+                pass
 
         self._raw_alert(
             "*BNF ENGINE — SHUTDOWN COMPLETE*\n"
@@ -844,6 +858,27 @@ class BNFEngine:
             time.sleep(1.5)
         except Exception as e:
             print(f"[BNFEngine] Dashboard API failed to launch: {e}")
+
+        # Launch the Dashboard UI (Vite dev server) and open browser automatically
+        print("[BNFEngine] Launching UI (Vite Dev Server)...")
+        try:
+            import subprocess
+            import os
+            import webbrowser
+            dashboard_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard")
+            # Start npm run dev in background
+            self.ui_process = subprocess.Popen(
+                "npm run dev",
+                cwd=dashboard_dir,
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            import time
+            time.sleep(2) # Give Vite a moment to bind to port
+            webbrowser.open("http://localhost:5173/")
+        except Exception as e:
+            print(f"[BNFEngine] Dashboard UI failed to launch: {e}")
 
         # Start MacroAgent immediately — it's a pure RSS reader, needs no Kite/ticks/market
         self._start_macro_standalone()
